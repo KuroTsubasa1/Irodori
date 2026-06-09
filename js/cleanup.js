@@ -51,6 +51,7 @@
     const subLeaf = new Array(NS);
     const subFace = new Int32Array(NS);
     const sv = new Int32Array(NS * 3); // 3 vertex ids per sub-triangle
+    const cen = new Float32Array(NS * 3); // sub-triangle centroid (model space)
 
     // vertex welding
     const vmap = new Map();
@@ -81,6 +82,9 @@
           sv[t * 3] = pid(x0, y0, z0);
           sv[t * 3 + 1] = pid(x1, y1, z1);
           sv[t * 3 + 2] = pid(x2, y2, z2);
+          cen[t * 3] = (x0 + x1 + x2) / 3;
+          cen[t * 3 + 1] = (y0 + y1 + y2) / 3;
+          cen[t * 3 + 2] = (z0 + z1 + z2) / 3;
           t += 1;
         }
       );
@@ -140,8 +144,76 @@
       list[cur[b]++] = a;
     }
 
-    mesh._sub = { start, list, subLeaf, subFace, trees, NS };
+    mesh._sub = { start, list, subLeaf, subFace, trees, cen, NS };
     return mesh._sub;
+  }
+
+  // Flood from seedSub over adjacency, keeping sub-triangles whose centroid
+  // passes `accept(i)`. Returns the connected member indices.
+  function floodAccept(g, seedSub, accept) {
+    const { start, list, NS } = g;
+    const seen = new Uint8Array(NS);
+    const out = [];
+    const stk = [seedSub];
+    seen[seedSub] = 1;
+    while (stk.length) {
+      const u = stk.pop();
+      out.push(u);
+      for (let e = start[u]; e < start[u + 1]; e++) {
+        const v = list[e];
+        if (!seen[v] && accept(v)) {
+          seen[v] = 1;
+          stk.push(v);
+        }
+      }
+    }
+    return out;
+  }
+
+  // Brush: connected sub-triangles within `radius` of point p, reachable from
+  // seedSub across the surface (so it doesn't bleed through to the far side).
+  function selectRadius(mesh, seedSub, px, py, pz, radius) {
+    const g = buildSubGraph(mesh);
+    const cen = g.cen;
+    const r2 = radius * radius;
+    const near = (i) => {
+      const dx = cen[i * 3] - px, dy = cen[i * 3 + 1] - py, dz = cen[i * 3 + 2] - pz;
+      return dx * dx + dy * dy + dz * dz <= r2;
+    };
+    if (!near(seedSub)) return [seedSub];
+    return floodAccept(g, seedSub, near);
+  }
+
+  // Ring/contour: connected band on the clicked feature within +/- half of the
+  // seed's coordinate along `axis` (0=x,1=y,2=z). Wraps around tubular features.
+  function selectBand(mesh, seedSub, axis, half) {
+    const g = buildSubGraph(mesh);
+    const cen = g.cen;
+    const h0 = cen[seedSub * 3 + axis];
+    const inBand = (i) => Math.abs(cen[i * 3 + axis] - h0) <= half;
+    return floodAccept(g, seedSub, inBand);
+  }
+
+  // Paint the given local sub-triangles to `state`; re-encode affected faces.
+  // Does NOT collapse, so the cached graph stays valid for fast repeated paints.
+  function applyStates(mesh, subs, state) {
+    const g = buildSubGraph(mesh);
+    const { subLeaf, subFace, trees } = g;
+    const changedFaces = new Set();
+    for (let k = 0; k < subs.length; k++) {
+      const s = subs[k];
+      if (subLeaf[s].state !== state) {
+        subLeaf[s].state = state;
+        changedFaces.add(subFace[s]);
+      }
+    }
+    const dom = mesh.dom;
+    changedFaces.forEach((f) => {
+      mesh.paints[f] = Paint.encode(trees[f]);
+      if (dom) dom[f] = Paint.dominantState(trees[f]);
+    });
+    mesh._subSizes = null; // states changed; graph geometry unchanged
+    return { changedFaces, count: subs.length };
   }
 
   // Flood the same-state component containing `seed`; returns member indices.
@@ -328,6 +400,9 @@
     buildSubGraph,
     removeIslandsSub,
     fillRegion,
+    selectRadius,
+    selectBand,
+    applyStates,
     subSizes,
     invalidateSub,
   };

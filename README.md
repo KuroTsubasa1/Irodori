@@ -1,4 +1,6 @@
-# 3MF Color Fixer
+# 彩 Irodori — 3MF Color Fixer
+
+*Irodori (彩)* — "the tasteful arrangement of color."
 
 A browser tool to load painted **.3mf** models (Bambu Studio / PrusaSlicer
 multi-color "paint" format), view them in 3D, and remove **stray-color islands**
@@ -9,26 +11,30 @@ Everything runs locally in your browser. Nothing is uploaded.
 
 ## Use it
 
-1. Open **`index.html`** in a browser (double-click it, or `open index.html` on
-   macOS). No install or server needed.
-2. **Load a .3mf** (button or drag-and-drop). The model appears in 3D — drag to
-   rotate, scroll to zoom.
-3. In **Island cleanup**, set *Max island size* (how big a wrong-color patch can
-   be and still get removed), click **Preview** (changed sub-triangles flash
-   pink), then **Apply**.
-4. Use the **Filaments** checkboxes to control which colors are allowed to be
-   removed (e.g. untick a color to protect small intentional details of it).
-   The size slider is logarithmic; type an exact value (up to 50000) in the box
-   to reach bigger stray patches.
-5. For anything automatic cleanup misses, use the **Fill tool**: enable it, pick
-   a fill color (or *Auto*), and click the patch — its whole connected region is
-   recolored. Dragging still rotates the model.
-6. Click **Export corrected .3mf** to download `<name>_fixed.3mf`. Open it back
-   in Bambu Studio.
+Open **`index.html`** in a browser (double-click, or `open index.html`). No
+install or server needed. The window is a small editor: a centered **toolbar**
+on top with an **options strip** beneath it (the active tool's settings + color
+palette), the **workflow** on the left, and the **3D view** filling the rest.
 
-**Undo / Redo** (buttons or ⌘/Ctrl-Z and ⌘/Ctrl-Shift-Z) step through your full
-edit history. **Reset to original** jumps back to the loaded file. Cleanup only
-ever changes colors, never geometry.
+1. **Load a .3mf** (button or drag-and-drop). The model appears upright (the
+   viewer is Z-up, matching the slicer).
+2. **Auto-clean** (left): set *Patch size*, **Preview** (changes flash cyan),
+   then **Clean**. Toggle off any **color** you want protected. The size slider
+   is logarithmic; type an exact value (up to 50000) for bigger patches.
+3. Tools (top bar), each with options on the right and a shared color palette:
+   - 🖐 **Orbit** — look around (drag / scroll / right-drag pan).
+   - ⟲ **Rotate** — turn the model in 90° steps; baked into the saved file.
+   - 🖌 **Brush** — left-drag to paint with the selected color (right-drag still
+     rotates); adjustable size.
+   - ◍ **Ring** — click a feature to wrap a colored band around it at that
+     height; place two and let the slicer fill between them.
+   - 🪣 **Fill** — click a patch to flood its connected region (to a color, or
+     *Auto* = the surrounding color).
+4. **Export** (top right) downloads `<name>_fixed.3mf`. Open it in Bambu Studio.
+
+**Undo / Redo** (buttons or ⌘/Ctrl-Z, ⌘/Ctrl-Shift-Z) step through edits.
+**Reset to original** reverts color edits. The **◐** button toggles the
+backdrop light/dark; **⤢** refits the view.
 
 ## How the cleanup works
 

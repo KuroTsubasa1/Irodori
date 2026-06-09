@@ -22,47 +22,98 @@
 
   // picking
   let raycaster, mouse;
-  let pickEnabled = false,
+  let toolMode = "orbit",
     pickCb = null,
-    pointerDown = null;
+    paintCb = null,
+    pointerDown = null,
+    painting = false,
+    moveRaf = false,
+    lastMove = null;
+  // brush/ring cursor preview
+  let brushCursor = null,
+    ringCursor = null,
+    cursorType = null,
+    cursorRadius = 1,
+    modelCx = 0,
+    modelCy = 0,
+    modelXYR = 50;
+  const ZUP = new THREE.Vector3(0, 0, 1);
+  const tmpV = new THREE.Vector3(),
+    tmpQ = new THREE.Quaternion();
 
-  const HIGHLIGHT = new THREE.Color("#ff00e6").convertSRGBToLinear();
+  const HIGHLIGHT = new THREE.Color("#1fe3ff").convertSRGBToLinear();
 
   function init(container) {
     scene = new THREE.Scene();
-    scene.background = new THREE.Color("#23272e");
+    scene.background = null; // let the CSS gradient stage show through
     const w = container.clientWidth,
       h = container.clientHeight;
     camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 5000);
-    camera.position.set(60, 60, 120);
-    renderer = new THREE.WebGLRenderer({ antialias: true });
+    camera.up.set(0, 0, 1); // Z is up (printer convention) so models stand upright
+    camera.position.set(80, -120, 80);
+    renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(w, h);
+    renderer.setClearColor(0x000000, 0);
     renderer.outputEncoding = THREE.sRGBEncoding;
     container.appendChild(renderer.domElement);
     controls = new THREE.OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-    scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 0.9));
-    const d1 = new THREE.DirectionalLight(0xffffff, 0.7);
-    d1.position.set(1, 1, 1);
-    scene.add(d1);
-    const d2 = new THREE.DirectionalLight(0xffffff, 0.4);
-    d2.position.set(-1, 0.5, -1);
-    scene.add(d2);
+    // studio lighting: soft ambient + key / fill / rim for form and separation
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xb9bfc9, 0.7));
+    scene.add(new THREE.AmbientLight(0xffffff, 0.25));
+    const key = new THREE.DirectionalLight(0xffffff, 0.95);
+    key.position.set(0.7, 1.0, 0.85);
+    scene.add(key);
+    const fill = new THREE.DirectionalLight(0xffffff, 0.35);
+    fill.position.set(-0.9, 0.35, 0.5);
+    scene.add(fill);
+    const rim = new THREE.DirectionalLight(0xffffff, 0.7);
+    rim.position.set(-0.4, 0.7, -1.0); // back light to outline the silhouette
+    scene.add(rim);
     root = new THREE.Group();
     scene.add(root);
+
+    brushCursor = circleLoop("#ff5d4e");
+    ringCursor = circleLoop("#ff5d4e");
+    scene.add(brushCursor, ringCursor);
 
     raycaster = new THREE.Raycaster();
     mouse = new THREE.Vector2();
     const el = renderer.domElement;
     el.addEventListener("pointerdown", (e) => {
       pointerDown = { x: e.clientX, y: e.clientY };
+      if (toolMode === "paint" && e.button === 0 && paintCb) {
+        painting = true;
+        const hit = pick(e.clientX, e.clientY);
+        if (hit && paintCb.down) paintCb.down(hit);
+      }
     });
-    el.addEventListener("pointerup", (e) => {
+    el.addEventListener("pointermove", (e) => {
+      lastMove = { x: e.clientX, y: e.clientY };
+      if (moveRaf) return;
+      moveRaf = true;
+      requestAnimationFrame(() => {
+        moveRaf = false;
+        if (!lastMove) return;
+        const want = painting || cursorType;
+        const hit = want ? pick(lastMove.x, lastMove.y) : null;
+        if (painting && hit && paintCb && paintCb.move) paintCb.move(hit);
+        if (cursorType) updateCursorFromHit(hit);
+      });
+    });
+    el.addEventListener("pointerleave", hideCursors);
+    window.addEventListener("pointerup", (e) => {
+      if (painting) {
+        painting = false;
+        if (paintCb && paintCb.up) paintCb.up();
+        pointerDown = null;
+        return;
+      }
       const d = pointerDown;
       pointerDown = null;
-      if (!pickEnabled || !pickCb || !d) return;
+      if (toolMode !== "pick" || !pickCb || !d) return;
       const dx = e.clientX - d.x,
         dy = e.clientY - d.y;
       if (dx * dx + dy * dy > 36) return; // a drag (rotate), not a click
@@ -72,6 +123,42 @@
 
     window.addEventListener("resize", () => onResize(container));
     animate();
+  }
+
+  // Tool/interaction mode: 'orbit' | 'pick' (click) | 'paint' (drag).
+  function setTool(mode) {
+    toolMode = mode;
+    if (!controls) return;
+    const M = THREE.MOUSE;
+    if (mode === "paint") {
+      // left paints, right-drag rotates
+      controls.mouseButtons = { LEFT: null, MIDDLE: M.DOLLY, RIGHT: M.ROTATE };
+      renderer.domElement.style.cursor = "crosshair";
+    } else {
+      controls.mouseButtons = { LEFT: M.ROTATE, MIDDLE: M.DOLLY, RIGHT: M.PAN };
+      renderer.domElement.style.cursor = mode === "pick" ? "crosshair" : "";
+    }
+  }
+  function onPaint(handlers) {
+    paintCb = handlers;
+  }
+  function toGlobalSub(meshIndex, localSub) {
+    return meshSubOffset[meshIndex] + localSub;
+  }
+  // Live recolor of specific sub-triangles (no rebuild) — used while brushing.
+  function paintSubs(globalSubs, state) {
+    if (!colorAttr) return;
+    const col = linColor(state);
+    const colors = colorAttr.array;
+    for (let i = 0; i < globalSubs.length; i++) {
+      const o = globalSubs[i] * 9;
+      for (let k = 0; k < 9; k += 3) {
+        colors[o + k] = col.r;
+        colors[o + k + 1] = col.g;
+        colors[o + k + 2] = col.b;
+      }
+    }
+    colorAttr.needsUpdate = true;
   }
 
   // Raycast the mesh; returns { meshIndex, localSub, state, point } or null.
@@ -91,13 +178,56 @@
       localSub: gsub - meshSubOffset[mi],
       state: triState[gsub],
       point: hits[0].point,
+      normal: hits[0].face ? hits[0].face.normal : ZUP,
     };
   }
 
-  function setPickEnabled(b) {
-    pickEnabled = b;
-    if (renderer) renderer.domElement.style.cursor = b ? "crosshair" : "";
+  // a unit circle line loop (XY plane), drawn on top as a cursor
+  function circleLoop(color) {
+    const seg = 56;
+    const pos = new Float32Array(seg * 3);
+    for (let i = 0; i < seg; i++) {
+      const a = (i / seg) * Math.PI * 2;
+      pos[i * 3] = Math.cos(a);
+      pos[i * 3 + 1] = Math.sin(a);
+    }
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    const m = new THREE.LineBasicMaterial({ color: color, transparent: true, depthTest: false });
+    const l = new THREE.LineLoop(g, m);
+    l.renderOrder = 999;
+    l.visible = false;
+    return l;
   }
+  function hideCursors() {
+    if (brushCursor) brushCursor.visible = false;
+    if (ringCursor) ringCursor.visible = false;
+  }
+  // Set the hover preview: type 'brush' (disc at cursor) | 'ring' (band) | null.
+  function setCursor(type, radius) {
+    cursorType = type;
+    if (radius) cursorRadius = radius;
+    if (!type) hideCursors();
+  }
+  function updateCursorFromHit(hit) {
+    if (!hit) { hideCursors(); return; }
+    if (cursorType === "brush") {
+      ringCursor.visible = false;
+      tmpV.copy(hit.normal).normalize();
+      tmpQ.setFromUnitVectors(ZUP, tmpV);
+      brushCursor.quaternion.copy(tmpQ);
+      brushCursor.position.copy(hit.point).addScaledVector(tmpV, cursorRadius * 0.03);
+      brushCursor.scale.setScalar(cursorRadius);
+      brushCursor.visible = true;
+    } else if (cursorType === "ring") {
+      brushCursor.visible = false;
+      ringCursor.quaternion.identity();
+      ringCursor.position.set(modelCx, modelCy, hit.point.z);
+      ringCursor.scale.setScalar(modelXYR);
+      ringCursor.visible = true;
+    }
+  }
+
   function onPick(cb) {
     pickCb = cb;
   }
@@ -216,6 +346,12 @@
     geom.setAttribute("color", colorAttr);
     geom.computeVertexNormals();
     geom.computeBoundingSphere();
+    geom.computeBoundingBox();
+    const bb = geom.boundingBox;
+    modelCx = (bb.min.x + bb.max.x) / 2;
+    modelCy = (bb.min.y + bb.max.y) / 2;
+    modelXYR = Math.max(bb.max.x - modelCx, bb.max.y - modelCy, 1) * 1.08;
+    hideCursors();
     const mat = new THREE.MeshStandardMaterial({
       vertexColors: true,
       roughness: 0.75,
@@ -227,7 +363,7 @@
     setHighlight(null);
   }
 
-  // Recolor sub-triangles; faces in highlightSet (global indices) flash pink.
+  // Recolor sub-triangles; faces in highlightSet (global indices) flash cyan.
   function setHighlight(highlightSet) {
     if (!colorAttr) return;
     const colors = colorAttr.array;
@@ -251,7 +387,8 @@
     const c = bs.center,
       r = bs.radius || 50;
     controls.target.copy(c);
-    const dir = new THREE.Vector3(0.6, 0.5, 1).normalize();
+    // Z-up: view from front (-Y), slightly to the side and above.
+    const dir = new THREE.Vector3(0.5, -1.0, 0.45).normalize();
     camera.position.copy(c).add(dir.multiplyScalar(r * 2.6));
     camera.near = r / 100;
     camera.far = r * 100;
@@ -265,8 +402,12 @@
     setHighlight,
     frame,
     pick,
-    setPickEnabled,
     onPick,
+    onPaint,
+    setTool,
+    setCursor,
+    paintSubs,
+    toGlobalSub,
     subTriangleCount: () => totalSub,
   };
 })(window);

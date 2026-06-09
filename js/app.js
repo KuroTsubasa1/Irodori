@@ -1,4 +1,5 @@
-/* app.js — UI glue: load, preview/apply cleanup, undo/redo history, export. */
+/* app.js — UI glue: tools (orbit/rotate/brush/ring/fill), auto-clean,
+ * undo/redo history, export. */
 (function () {
   "use strict";
 
@@ -7,41 +8,37 @@
 
   let doc = null;
   let fileName = "model.3mf";
+  let modelSize = 100;
 
-  // ---- edit history ----
-  let history = []; // [{ state:[{paints,dom}...], label }]
+  // history
+  let history = [];
   let histIndex = -1;
   let previewActive = false;
   const HIST_CAP = 60;
 
-  // ---- island-size control (log slider + number box) ----
+  // tools
+  let activeTool = "orbit";
+  let paintState = null; // selected palette color
+  let stroke = null; // active brush stroke
+
+  // island-size control (log slider + number)
   const SIZE_MAX = 50000;
-  const tickToVal = (t) =>
-    Math.min(SIZE_MAX, Math.max(1, Math.round(Math.pow(SIZE_MAX, t / 1000))));
-  const valToTick = (v) =>
-    Math.round((Math.log(Math.min(SIZE_MAX, Math.max(1, v))) / Math.log(SIZE_MAX)) * 1000);
+  const tickToVal = (t) => Math.min(SIZE_MAX, Math.max(1, Math.round(Math.pow(SIZE_MAX, t / 1000))));
+  const valToTick = (v) => Math.round((Math.log(Math.min(SIZE_MAX, Math.max(1, v))) / Math.log(SIZE_MAX)) * 1000);
   const getThreshold = () => Math.min(SIZE_MAX, Math.max(1, +$("sizeNum").value || 1));
 
-  // ---- fill tool ----
-  let fillActive = false;
-  let fillTarget = "auto"; // "auto" or a state string
-
-  // ---------- snapshot helpers ----------
+  // ---------- snapshots / history ----------
   function snap() {
-    return doc.meshes.map((m) => ({
-      paints: m.paints.slice(),
-      dom: Int32Array.from(m.dom),
-    }));
+    return doc.meshes.map((m) => ({ paints: m.paints.slice(), dom: Int32Array.from(m.dom) }));
   }
   function restore(state) {
     doc.meshes.forEach((m, i) => {
       m.paints = state[i].paints.slice();
       m.dom = Int32Array.from(state[i].dom);
-      Cleanup.invalidateSub(m); // paints changed -> sub-triangle graph is stale
+      Cleanup.invalidateSub(m);
     });
   }
   const current = () => history[histIndex].state;
-
   function pushHistory(label, stateClone) {
     history = history.slice(0, histIndex + 1);
     history.push({ state: stateClone || snap(), label });
@@ -52,12 +49,9 @@
   function updateHist() {
     $("undoBtn").disabled = histIndex <= 0;
     $("redoBtn").disabled = histIndex >= history.length - 1;
-    const cur = history[histIndex];
-    $("histInfo").textContent =
-      "Step " + (histIndex + 1) + "/" + history.length + " · " + cur.label;
+    $("histInfo").textContent = "Step " + (histIndex + 1) + "/" + history.length + " · " + history[histIndex].label;
   }
 
-  // ---------- rendering ----------
   function render(highlightSet) {
     Viewer.build(doc);
     if (highlightSet) Viewer.setHighlight(highlightSet);
@@ -65,7 +59,7 @@
 
   // ---------- helpers ----------
   function stateColor(s) {
-    let idx = s === 0 ? doc.defaultExtruder : s;
+    const idx = s === 0 ? doc.defaultExtruder : s;
     const f = doc.filaments[idx - 1] || doc.filaments[0];
     return f ? f.hex : "#cccccc";
   }
@@ -81,16 +75,10 @@
     clearTimeout(toast._t);
     toast._t = setTimeout(() => (t.hidden = true), 2600);
   }
-  // Show a message, let it paint, then run the (blocking) work.
   function busy(msg, fn) {
     toast(msg);
     setTimeout(() => {
-      try {
-        fn();
-      } catch (e) {
-        console.error(e);
-        toast("Error: " + e.message, true);
-      }
+      try { fn(); } catch (e) { console.error(e); toast("Error: " + e.message, true); }
     }, 30);
   }
   function gatherStates() {
@@ -103,11 +91,24 @@
   }
   function removableSet() {
     const set = new Set();
-    document
-      .querySelectorAll("#filamentList input[data-state]:checked")
-      .forEach((cb) => set.add(+cb.dataset.state));
+    document.querySelectorAll("#filamentList input[data-state]:checked").forEach((cb) => set.add(+cb.dataset.state));
     return set;
   }
+  function computeModelSize() {
+    let a = Infinity, b = Infinity, c = Infinity, d = -Infinity, e = -Infinity, f = -Infinity;
+    for (const m of doc.meshes) {
+      const P = m.positions;
+      for (let i = 0; i < P.length; i += 3) {
+        const x = P[i], y = P[i + 1], z = P[i + 2];
+        if (x < a) a = x; if (x > d) d = x;
+        if (y < b) b = y; if (y > e) e = y;
+        if (z < c) c = z; if (z > f) f = z;
+      }
+    }
+    modelSize = Math.hypot(d - a, e - b, f - c) || 100;
+  }
+  const brushRadius = () => (+$("brushSize").value / 100) * modelSize * 0.15 + modelSize * 0.004;
+  const ringHalf = () => (+$("ringThick").value / 100) * modelSize * 0.05 + modelSize * 0.002;
 
   // ---------- loading ----------
   async function loadFile(file) {
@@ -115,246 +116,253 @@
       toast("Loading " + file.name + " …");
       fileName = file.name;
       doc = await ThreeMF.load(await file.arrayBuffer());
-      if (!doc.meshes.length) {
-        toast("No mesh found in this .3mf", true);
-        return;
-      }
+      if (!doc.meshes.length) { toast("No mesh found in this .3mf", true); return; }
       for (const m of doc.meshes) Cleanup.computeDominant(m);
+      computeModelSize();
       render(null);
       Viewer.frame();
       history = [{ state: snap(), label: "Loaded" }];
       histIndex = 0;
       previewActive = false;
       buildFilamentUI();
-      buildFillTargets();
-      setFillActive(false);
+      buildPalette();
+      setTool("orbit");
       updateStats();
       updateHist();
       const nf = doc.meshes.reduce((a, m) => a + m.nf, 0);
       $("fileInfo").innerHTML =
-        "<b>" + file.name + "</b><br>" +
-        nf.toLocaleString() + " faces · " +
-        Viewer.subTriangleCount().toLocaleString() + " painted sub-triangles · " +
-        doc.filaments.length + " filaments";
-      ["filamentCard", "cleanCard", "fillCard", "statsCard", "actionCard"].forEach(
-        (id) => ($(id).hidden = false)
-      );
+        "<b>" + file.name + "</b><br>" + nf.toLocaleString() + " faces · " +
+        Viewer.subTriangleCount().toLocaleString() + " sub-triangles · " + doc.filaments.length + " filaments";
+      ["filamentCard", "cleanCard", "statsCard", "historyCard"].forEach((id) => ($(id).hidden = false));
+      $("exportBtn").disabled = false;
       $("reframeBtn").hidden = false;
+      $("bgToggle").hidden = false;
       $("overlay").classList.add("hide");
-      toast("Loaded · drag to rotate, scroll to zoom");
+      toast("Loaded · pick a tool up top to edit");
     } catch (e) {
       console.error(e);
       toast("Failed to load: " + e.message, true);
     }
   }
 
-  function buildColorList(listId, checkedDefault, onChange) {
+  function buildFilamentUI() {
     const fc = gatherStates();
-    const list = $(listId);
+    const list = $("filamentList");
     list.innerHTML = "";
-    Object.keys(fc)
-      .map(Number)
-      .sort((a, b) => a - b)
-      .forEach((s) => {
-        const li = document.createElement("li");
-        const cb = document.createElement("input");
-        cb.type = "checkbox";
-        cb.checked = checkedDefault;
-        cb.dataset.state = s;
-        if (onChange) cb.addEventListener("change", onChange);
-        const sw = document.createElement("span");
-        sw.className = "swatch";
-        sw.style.background = stateColor(s);
-        const nm = document.createElement("span");
-        nm.className = "fname";
-        nm.textContent = colorName(s);
-        li.append(cb, sw, nm);
-        if (listId === "filamentList") {
-          const ct = document.createElement("span");
-          ct.className = "fcount";
-          ct.textContent = fc[s].toLocaleString();
-          li.appendChild(ct);
-        }
-        list.appendChild(li);
-      });
-  }
-  const buildFilamentUI = () => buildColorList("filamentList", true, clearPreview);
-
-  // ---------- fill tool ----------
-  function buildFillTargets() {
-    const fc = gatherStates();
-    const list = $("fillTargets");
-    list.innerHTML = "";
-    const add = (key, swatchCss, label) => {
+    Object.keys(fc).map(Number).sort((a, b) => a - b).forEach((s) => {
       const li = document.createElement("li");
-      li.dataset.target = key;
+      const cb = document.createElement("input");
+      cb.type = "checkbox"; cb.checked = true; cb.dataset.state = s;
+      cb.addEventListener("change", clearPreview);
       const sw = document.createElement("span");
-      sw.className = "swatch";
-      sw.style.flex = "0 0 auto";
-      sw.style.background = swatchCss;
+      sw.className = "swatch"; sw.style.background = stateColor(s);
       const nm = document.createElement("span");
-      nm.className = "fname";
-      nm.textContent = label;
-      const ck = document.createElement("span");
-      ck.className = "check";
-      ck.textContent = "✓";
-      li.append(sw, nm, ck);
-      li.addEventListener("click", () => selectFillTarget(key));
+      nm.className = "fname"; nm.textContent = colorName(s);
+      const ct = document.createElement("span");
+      ct.className = "fcount"; ct.textContent = fc[s].toLocaleString();
+      li.append(cb, sw, nm, ct);
       list.appendChild(li);
-    };
-    add("auto", "conic-gradient(#888,#bbb,#888)", "Auto (surrounding color)");
-    Object.keys(fc)
-      .map(Number)
-      .sort((a, b) => a - b)
-      .forEach((s) => add(String(s), stateColor(s), colorName(s)));
-    selectFillTarget("auto");
-  }
-  function selectFillTarget(key) {
-    fillTarget = key;
-    document
-      .querySelectorAll("#fillTargets li")
-      .forEach((li) => li.classList.toggle("sel", li.dataset.target === key));
-  }
-  function setFillActive(on) {
-    fillActive = on;
-    Viewer.setPickEnabled(on);
-    const b = $("fillToggle");
-    b.classList.toggle("active", on);
-    b.textContent = on ? "🪣 Fill tool ON — click a patch" : "🪣 Enable fill tool";
-  }
-  function onFillPick(hit) {
-    if (!doc || !fillActive) return;
-    if (previewActive) {
-      restore(current());
-      previewActive = false;
-    }
-    const m = doc.meshes[hit.meshIndex];
-    const target = fillTarget === "auto" ? null : +fillTarget;
-    busy("Filling…", () => {
-      const res = Cleanup.fillRegion(m, hit.localSub, target);
-      if (res.count === 0) {
-        render(null);
-        toast("Nothing to fill there", true);
-        return;
-      }
-      pushHistory("Fill region");
-      render(null);
-      updateStats();
-      toast("Filled " + res.count.toLocaleString() + " sub-triangles");
     });
   }
-  Viewer.onPick(onFillPick);
 
+  // ---------- palette / tools ----------
+  function buildPalette() {
+    const fc = gatherStates();
+    const pal = $("palette");
+    pal.innerHTML = "";
+    const states = Object.keys(fc).map(Number).sort((a, b) => a - b);
+    states.forEach((s) => {
+      const d = document.createElement("div");
+      d.className = "pal"; d.dataset.state = s; d.style.background = stateColor(s); d.title = colorName(s);
+      d.addEventListener("click", () => selectPaint(s));
+      pal.appendChild(d);
+    });
+    if (states.length) selectPaint(states[states.length - 1]);
+  }
+  function selectPaint(s) {
+    paintState = s;
+    document.querySelectorAll(".pal").forEach((p) => p.classList.toggle("sel", +p.dataset.state === s));
+  }
+  const sizeDotPx = (v) => Math.round(6 + (v / 100) * 34);
+  function updateSizeDots() {
+    const b = sizeDotPx(+$("brushSize").value);
+    $("brushPrev").style.width = $("brushPrev").style.height = b + "px";
+    const r = sizeDotPx(+$("ringThick").value);
+    $("ringPrev").style.width = $("ringPrev").style.height = r + "px";
+  }
+  function setTool(name) {
+    activeTool = name;
+    document.querySelectorAll("#toolbar .tool").forEach((b) => b.classList.toggle("active", b.dataset.tool === name));
+    document.querySelectorAll("#optionsbar .opt").forEach((p) => (p.hidden = p.dataset.panel !== name));
+    const paintTool = name === "brush" || name === "ring" || name === "fill";
+    $("palette").classList.toggle("hide", !paintTool);
+    Viewer.setTool(name === "brush" ? "paint" : name === "ring" || name === "fill" ? "pick" : "orbit");
+    if (name === "brush") Viewer.setCursor("brush", brushRadius());
+    else if (name === "ring") Viewer.setCursor("ring", ringHalf());
+    else Viewer.setCursor(null);
+    if (doc && paintTool && doc.meshes.some((m) => !m._sub)) {
+      busy("Preparing tool…", () => { for (const m of doc.meshes) Cleanup.buildSubGraph(m); });
+    }
+    updateSizeDots();
+  }
+
+  // ---------- rotate ----------
+  function rotateMesh(m, axis, ang) {
+    const P = m.positions, cos = Math.cos(ang), sin = Math.sin(ang);
+    let a = Infinity, b = Infinity, c = Infinity, d = -Infinity, e = -Infinity, f = -Infinity;
+    for (let i = 0; i < P.length; i += 3) {
+      const x = P[i], y = P[i + 1], z = P[i + 2];
+      if (x < a) a = x; if (x > d) d = x; if (y < b) b = y; if (y > e) e = y; if (z < c) c = z; if (z > f) f = z;
+    }
+    const cx = (a + d) / 2, cy = (b + e) / 2, cz = (c + f) / 2;
+    for (let i = 0; i < P.length; i += 3) {
+      let x = P[i] - cx, y = P[i + 1] - cy, z = P[i + 2] - cz;
+      if (axis === 0) { const ny = y * cos - z * sin, nz = y * sin + z * cos; y = ny; z = nz; }
+      else if (axis === 1) { const nx = x * cos + z * sin, nz = -x * sin + z * cos; x = nx; z = nz; }
+      else { const nx = x * cos - y * sin, ny = x * sin + y * cos; x = nx; y = ny; }
+      P[i] = x + cx; P[i + 1] = y + cy; P[i + 2] = z + cz;
+    }
+  }
+  function doRotate(axis, dir) {
+    if (!doc) return;
+    const ang = (dir * Math.PI) / 2;
+    for (const m of doc.meshes) { rotateMesh(m, axis, ang); Cleanup.invalidateSub(m); }
+    computeModelSize();
+    render(null);
+    Viewer.frame();
+  }
+
+  // ---------- brush / ring / fill ----------
+  function startStroke(hit) {
+    if (paintState == null) return;
+    if (previewActive) { restore(current()); previewActive = false; }
+    stroke = { mi: hit.meshIndex, pend: new Set() };
+    brushAt(hit);
+  }
+  function brushAt(hit) {
+    if (!stroke || hit.meshIndex !== stroke.mi) return;
+    const m = doc.meshes[hit.meshIndex];
+    const subs = Cleanup.selectRadius(m, hit.localSub, hit.point.x, hit.point.y, hit.point.z, brushRadius());
+    const g = [];
+    for (const s of subs) { stroke.pend.add(s); g.push(Viewer.toGlobalSub(hit.meshIndex, s)); }
+    Viewer.paintSubs(g, paintState);
+  }
+  function endStroke() {
+    if (!stroke) return;
+    const m = doc.meshes[stroke.mi], subs = [...stroke.pend];
+    stroke = null;
+    if (!subs.length) return;
+    Cleanup.applyStates(m, subs, paintState);
+    pushHistory("Brush");
+    render(null);
+    updateStats();
+  }
+  Viewer.onPaint({
+    down: (hit) => { if (activeTool === "brush") startStroke(hit); },
+    move: (hit) => { if (activeTool === "brush") brushAt(hit); },
+    up: () => endStroke(),
+  });
+
+  function doRing(hit) {
+    if (paintState == null) return;
+    if (previewActive) { restore(current()); previewActive = false; }
+    const m = doc.meshes[hit.meshIndex];
+    const subs = Cleanup.selectBand(m, hit.localSub, 2, ringHalf());
+    if (!subs.length) return;
+    Cleanup.applyStates(m, subs, paintState);
+    pushHistory("Ring");
+    render(null);
+    updateStats();
+    toast("Ring · " + subs.length.toLocaleString() + " sub-triangles");
+  }
+  function doFill(hit) {
+    if (previewActive) { restore(current()); previewActive = false; }
+    const m = doc.meshes[hit.meshIndex];
+    const target = $("fillAuto").checked ? null : paintState;
+    const res = Cleanup.fillRegion(m, hit.localSub, target);
+    if (!res.count) { toast("Nothing to fill there", true); return; }
+    pushHistory("Fill");
+    render(null);
+    updateStats();
+    toast("Filled " + res.count.toLocaleString() + " sub-triangles");
+  }
+  Viewer.onPick((hit) => {
+    if (activeTool === "ring") doRing(hit);
+    else if (activeTool === "fill") doFill(hit);
+  });
+
+  // ---------- auto-clean ----------
   function updateStats() {
     const thr = getThreshold();
-    const sizesAll = {}; // state -> array of component sizes
+    const sizesAll = {};
     for (const m of doc.meshes) {
       const s = Cleanup.subSizes(m);
       for (const k in s) (sizesAll[k] || (sizesAll[k] = [])).push(...s[k]);
     }
-    const rows = Object.keys(sizesAll)
-      .map(Number)
-      .sort((a, b) => a - b)
-      .map((s) => {
-        const small = sizesAll[s].filter((x) => x <= thr).length;
-        return (
-          '<div class="row" style="gap:8px;margin:3px 0">' +
-          '<span class="swatch" style="flex:0 0 auto;background:' + stateColor(s) + '"></span>' +
-          '<span class="fname">' + colorName(s) + "</span>" +
-          '<span class="fcount">' + (small ? small + " small" : "clean") + "</span></div>"
-        );
-      })
-      .join("");
-    $("statsBody").innerHTML =
-      rows + '<p class="hint" style="margin-top:8px">“small” = sub-triangle regions ≤ ' +
-      thr + " (current threshold).</p>";
+    const rows = Object.keys(sizesAll).map(Number).sort((a, b) => a - b).map((s) => {
+      const small = sizesAll[s].filter((x) => x <= thr).length;
+      return '<div class="row" style="gap:8px;margin:4px 0"><span class="swatch" style="flex:0 0 auto;background:' +
+        stateColor(s) + '"></span><span class="fname">' + colorName(s) + '</span><span class="fcount">' +
+        (small ? small + " small" : "clean") + "</span></div>";
+    }).join("");
+    $("statsBody").innerHTML = rows +
+      '<p class="hint" style="margin-top:8px">“small” = sub-triangle regions ≤ ' + thr + ".</p>";
   }
-
-  // ---------- cleanup ops ----------
-  // Runs sub-triangle island removal in place (mesh must hold current() state)
-  // and returns the changed global-face set for highlighting.
   function runIslands() {
-    const removable = removableSet();
-    const maxSize = getThreshold();
-    let count = 0;
-    const changedGlobal = new Set();
-    let off = 0;
+    const removable = removableSet(), maxSize = getThreshold();
+    let count = 0; const changedGlobal = new Set(); let off = 0;
     for (const m of doc.meshes) {
       const res = Cleanup.removeIslandsSub(m, { maxSize, removable, passes: 3 });
       count += res.count;
-      res.changedFaces.forEach((f) => changedGlobal.add(off + f));
+      res.changedFaces.forEach((fc) => changedGlobal.add(off + fc));
       off += m.nf;
     }
     return { count, changedGlobal };
   }
-
   function clearPreview() {
     if (!doc) return;
-    if (previewActive) {
-      restore(current());
-      previewActive = false;
-      render(null);
-    }
+    if (previewActive) { restore(current()); previewActive = false; render(null); }
     $("previewInfo").textContent = "";
     updateStats();
   }
-
-  let previewResult = null; // { count } of the active preview
-
+  let previewResult = null;
   function doPreview() {
     if (!doc) return;
-    busy("Analyzing sub-triangles…", () => {
-      if (previewActive) restore(current()); // clear a prior preview first
+    busy("Analyzing…", () => {
+      if (previewActive) restore(current());
       const { count, changedGlobal } = runIslands();
-      previewActive = true;
-      previewResult = { count };
+      previewActive = true; previewResult = { count };
       render(changedGlobal);
-      $("previewInfo").innerHTML =
-        count === 0
-          ? "Nothing to remove at this threshold."
-          : "<b>" + count.toLocaleString() +
-            "</b> sub-triangles will change (shown in <b style='color:#ff00e6'>pink</b>). Click Apply to keep.";
+      $("previewInfo").innerHTML = count === 0 ? "Nothing to remove at this size."
+        : "<b>" + count.toLocaleString() + "</b> sub-triangles will change (in <b style='color:#1fa8c4'>cyan</b>). Click Clean to keep.";
     });
   }
-
   function doApply() {
     if (!doc) return;
-    busy("Applying…", () => {
+    busy("Cleaning…", () => {
       let count;
-      if (previewActive) {
-        count = previewResult ? previewResult.count : 0; // mesh already previewed
-      } else {
-        restore(current());
-        count = runIslands().count;
-      }
+      if (previewActive) { count = previewResult ? previewResult.count : 0; }
+      else { restore(current()); count = runIslands().count; }
       previewActive = false;
-      pushHistory("Remove islands (≤" + getThreshold() + ")");
-      render(null);
-      updateStats();
+      pushHistory("Auto-clean (≤" + getThreshold() + ")");
+      render(null); updateStats();
       $("previewInfo").textContent = "";
-      toast(count === 0 ? "Nothing to remove" : "Removed " + count.toLocaleString() + " stray sub-triangles");
+      toast(count === 0 ? "Nothing to remove" : "Cleaned " + count.toLocaleString() + " stray sub-triangles");
     });
   }
-
   function doReset() {
     if (!doc) return;
     restore(history[0].state);
     previewActive = false;
     pushHistory("Reset to original");
-    render(null);
-    updateStats();
+    render(null); updateStats();
     $("previewInfo").textContent = "";
     toast("Reverted to original");
   }
-
   function jumpTo(idx) {
     if (!doc || idx < 0 || idx >= history.length) return;
-    previewActive = false;
-    histIndex = idx;
-    restore(current());
-    render(null);
-    updateStats();
-    updateHist();
+    previewActive = false; histIndex = idx;
+    restore(current()); render(null); updateStats(); updateHist();
     $("previewInfo").textContent = "";
   }
   const doUndo = () => jumpTo(histIndex - 1);
@@ -363,11 +371,7 @@
   async function doExport() {
     if (!doc) return;
     try {
-      if (previewActive) {
-        restore(current());
-        previewActive = false;
-        render(null);
-      }
+      if (previewActive) { restore(current()); previewActive = false; render(null); }
       restore(current());
       toast("Packing .3mf …");
       const blob = await ThreeMF.exportZip(doc);
@@ -377,60 +381,45 @@
       a.click();
       setTimeout(() => URL.revokeObjectURL(a.href), 5000);
       toast("Saved " + a.download);
-    } catch (e) {
-      console.error(e);
-      toast("Export failed: " + e.message, true);
-    }
+    } catch (e) { console.error(e); toast("Export failed: " + e.message, true); }
   }
 
   // ---------- events ----------
-  $("fileInput").addEventListener("change", (e) => {
-    if (e.target.files[0]) loadFile(e.target.files[0]);
+  $("fileInput").addEventListener("change", (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+  document.querySelectorAll("#toolbar .tool").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.tool)));
+  document.querySelectorAll("#optionsbar [data-rot]").forEach((b) =>
+    b.addEventListener("click", () => { const [ax, d] = b.dataset.rot.split(":"); doRotate({ x: 0, y: 1, z: 2 }[ax], +d); })
+  );
+  $("recenterBtn").addEventListener("click", () => Viewer.frame());
+  $("brushSize").addEventListener("input", () => {
+    updateSizeDots();
+    if (activeTool === "brush") Viewer.setCursor("brush", brushRadius());
   });
-  $("sizeRange").addEventListener("input", () => {
-    $("sizeNum").value = tickToVal(+$("sizeRange").value);
-    clearPreview();
+  $("ringThick").addEventListener("input", () => {
+    updateSizeDots();
+    if (activeTool === "ring") Viewer.setCursor("ring", ringHalf());
   });
-  $("sizeNum").addEventListener("input", () => {
-    $("sizeRange").value = valToTick(+$("sizeNum").value || 1);
-    clearPreview();
-  });
+  $("sizeRange").addEventListener("input", () => { $("sizeNum").value = tickToVal(+$("sizeRange").value); clearPreview(); });
+  $("sizeNum").addEventListener("input", () => { $("sizeRange").value = valToTick(+$("sizeNum").value || 1); clearPreview(); });
   $("previewBtn").addEventListener("click", doPreview);
   $("applyBtn").addEventListener("click", doApply);
-  $("fillToggle").addEventListener("click", () => setFillActive(!fillActive));
   $("resetBtn").addEventListener("click", doReset);
   $("undoBtn").addEventListener("click", doUndo);
   $("redoBtn").addEventListener("click", doRedo);
   $("exportBtn").addEventListener("click", doExport);
   $("reframeBtn").addEventListener("click", () => Viewer.frame());
+  $("bgToggle").addEventListener("click", () => $("stage").classList.toggle("dark"));
 
   document.addEventListener("keydown", (e) => {
     if (!doc) return;
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === "z") {
-      e.preventDefault();
-      if (e.shiftKey) doRedo();
-      else doUndo();
-    } else if (mod && e.key.toLowerCase() === "y") {
-      e.preventDefault();
-      doRedo();
-    }
+    if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); }
+    else if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); doRedo(); }
   });
 
-  // drag & drop
   const stage = $("stage");
-  ["dragenter", "dragover"].forEach((ev) =>
-    stage.addEventListener(ev, (e) => {
-      e.preventDefault();
-      stage.classList.add("dragover");
-    })
-  );
-  ["dragleave", "drop"].forEach((ev) =>
-    stage.addEventListener(ev, (e) => {
-      e.preventDefault();
-      stage.classList.remove("dragover");
-    })
-  );
+  ["dragenter", "dragover"].forEach((ev) => stage.addEventListener(ev, (e) => { e.preventDefault(); stage.classList.add("dragover"); }));
+  ["dragleave", "drop"].forEach((ev) => stage.addEventListener(ev, (e) => { e.preventDefault(); stage.classList.remove("dragover"); }));
   stage.addEventListener("drop", (e) => {
     const f = e.dataTransfer.files[0];
     if (f && /\.3mf$/i.test(f.name)) loadFile(f);

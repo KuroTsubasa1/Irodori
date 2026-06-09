@@ -25,9 +25,10 @@
     if (meshIdx === -1) return null;
 
     // vertices
-    const vStart = text.indexOf("<vertices>", meshIdx);
-    const vEnd = text.indexOf("</vertices>", vStart);
-    const vBlock = text.slice(vStart, vEnd);
+    const vOpen = text.indexOf("<vertices>", meshIdx);
+    const vInner = vOpen + "<vertices>".length;
+    const vEnd = text.indexOf("</vertices>", vInner);
+    const vBlock = text.slice(vInner, vEnd);
     const vre = /<vertex\s+x="([^"]+)"\s+y="([^"]+)"\s+z="([^"]+)"/g;
     const xs = [];
     let m;
@@ -64,9 +65,11 @@
       v2: Int32Array.from(i2),
       v3: Int32Array.from(i3),
       paints, // string[] (mutable; "" == unpainted)
-      // pieces needed to rewrite the file on export:
-      _head: text.slice(0, innerStart),
-      _tail: text.slice(tClose),
+      // pieces needed to rewrite the file on export (vertices + triangles
+      // are both regenerated, so geometry edits like rotation are captured):
+      _pre: text.slice(0, vInner), // ... <vertices>
+      _mid: text.slice(vEnd, innerStart), // </vertices> ... <triangles>
+      _tail: text.slice(tClose), // </triangles> ...
     };
   }
 
@@ -113,27 +116,35 @@
     return { zip, filaments, defaultExtruder, meshes };
   }
 
-  // Rebuild the triangles block of each mesh from its current `paints` and
+  // Compact float formatting (trims trailing zeros, keeps printing precision).
+  function fnum(v) {
+    return Number.isInteger(v) ? String(v) : parseFloat(v.toFixed(5)).toString();
+  }
+
+  // Rebuild both the vertices and triangles blocks from the mesh's current
+  // positions/paints (so rotation and color edits are both written) and
   // generate a new .3mf Blob.
   async function exportZip(doc) {
     for (const mesh of doc.meshes) {
-      const lines = new Array(mesh.nf);
+      const P = mesh.positions;
+      const vlines = new Array(mesh.nv);
+      for (let i = 0; i < mesh.nv; i++) {
+        const o = i * 3;
+        vlines[i] =
+          '     <vertex x="' + fnum(P[o]) + '" y="' + fnum(P[o + 1]) +
+          '" z="' + fnum(P[o + 2]) + '"/>';
+      }
+      const tlines = new Array(mesh.nf);
       for (let i = 0; i < mesh.nf; i++) {
         const p = mesh.paints[i];
         const base =
-          '     <triangle v1="' +
-          mesh.v1[i] +
-          '" v2="' +
-          mesh.v2[i] +
-          '" v3="' +
-          mesh.v3[i] +
-          '"';
-        lines[i] = p
-          ? base + ' paint_color="' + p + '"/>'
-          : base + "/>";
+          '     <triangle v1="' + mesh.v1[i] + '" v2="' + mesh.v2[i] +
+          '" v3="' + mesh.v3[i] + '"';
+        tlines[i] = p ? base + ' paint_color="' + p + '"/>' : base + "/>";
       }
-      const inner = "\n" + lines.join("\n") + "\n    ";
-      const newText = mesh._head + inner + mesh._tail;
+      const vBlock = "\n" + vlines.join("\n") + "\n    ";
+      const tBlock = "\n" + tlines.join("\n") + "\n    ";
+      const newText = mesh._pre + vBlock + mesh._mid + tBlock + mesh._tail;
       doc.zip.file(mesh.path, newText);
     }
     return await doc.zip.generateAsync({
