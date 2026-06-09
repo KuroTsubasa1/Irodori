@@ -20,6 +20,7 @@
   let activeTool = "orbit";
   let paintState = null; // selected palette color
   let stroke = null; // active brush stroke
+  let lastHit = null; // last hovered surface hit (for live cursor)
 
   // island-size control (log slider + number)
   const SIZE_MAX = 50000;
@@ -197,9 +198,7 @@
     const paintTool = name === "brush" || name === "ring" || name === "fill";
     $("palette").classList.toggle("hide", !paintTool);
     Viewer.setTool(name === "brush" ? "paint" : name === "ring" || name === "fill" ? "pick" : "orbit");
-    if (name === "brush") Viewer.setCursor("brush", brushRadius());
-    else if (name === "ring") Viewer.setCursor("ring", ringHalf());
-    else Viewer.setCursor(null);
+    Viewer.enableHover(name === "brush" || name === "ring");
     if (doc && paintTool && doc.meshes.some((m) => !m._sub)) {
       busy("Preparing tool…", () => { for (const m of doc.meshes) Cleanup.buildSubGraph(m); });
     }
@@ -263,11 +262,13 @@
     up: () => endStroke(),
   });
 
+  const ringNeighborhood = () => modelSize * 0.2;
   function doRing(hit) {
     if (paintState == null) return;
     if (previewActive) { restore(current()); previewActive = false; }
     const m = doc.meshes[hit.meshIndex];
-    const subs = Cleanup.selectBand(m, hit.localSub, 2, ringHalf());
+    const fa = Cleanup.featureAxis(m, hit.localSub, ringNeighborhood());
+    const subs = Cleanup.selectBandAxis(m, hit.localSub, ringHalf(), fa.ax, fa.ay, fa.az);
     if (!subs.length) return;
     Cleanup.applyStates(m, subs, paintState);
     pushHistory("Ring");
@@ -275,6 +276,22 @@
     updateStats();
     toast("Ring · " + subs.length.toLocaleString() + " sub-triangles");
   }
+
+  // hover cursor preview (black ring) — follows the surface; for the ring tool
+  // it orients to the local feature axis so it wraps ears/tail correctly.
+  function onHover(hit) {
+    lastHit = hit;
+    if (!hit) { Viewer.hideCursor(); return; }
+    if (activeTool === "brush") {
+      const n = hit.normal;
+      Viewer.setCursorTransform(hit.point.x, hit.point.y, hit.point.z, n.x, n.y, n.z, brushRadius());
+    } else if (activeTool === "ring") {
+      const m = doc.meshes[hit.meshIndex];
+      const fa = Cleanup.featureAxis(m, hit.localSub, ringNeighborhood());
+      Viewer.setCursorTransform(fa.cx, fa.cy, fa.cz, fa.ax, fa.ay, fa.az, fa.radius);
+    }
+  }
+  Viewer.onHover(onHover);
   function doFill(hit) {
     if (previewActive) { restore(current()); previewActive = false; }
     const m = doc.meshes[hit.meshIndex];
@@ -393,11 +410,11 @@
   $("recenterBtn").addEventListener("click", () => Viewer.frame());
   $("brushSize").addEventListener("input", () => {
     updateSizeDots();
-    if (activeTool === "brush") Viewer.setCursor("brush", brushRadius());
+    if (activeTool === "brush" && lastHit) onHover(lastHit);
   });
   $("ringThick").addEventListener("input", () => {
     updateSizeDots();
-    if (activeTool === "ring") Viewer.setCursor("ring", ringHalf());
+    if (activeTool === "ring" && lastHit) onHover(lastHit);
   });
   $("sizeRange").addEventListener("input", () => { $("sizeNum").value = tickToVal(+$("sizeRange").value); clearPreview(); });
   $("sizeNum").addEventListener("input", () => { $("sizeRange").value = valToTick(+$("sizeNum").value || 1); clearPreview(); });

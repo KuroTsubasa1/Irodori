@@ -194,6 +194,84 @@
     return floodAccept(g, seedSub, inBand);
   }
 
+  // Estimate the local feature axis at a click via PCA of the surrounding patch
+  // (within Euclidean radius Rn). The dominant eigenvector is the direction the
+  // feature extends (the ear/tail/limb axis). Returns the axis, a ring center on
+  // that axis at the click's cross-section, and a representative ring radius.
+  function featureAxis(mesh, seedSub, Rn) {
+    const g = buildSubGraph(mesh);
+    const { start, list, cen, NS } = g;
+    const sx = cen[seedSub * 3], sy = cen[seedSub * 3 + 1], sz = cen[seedSub * 3 + 2];
+    const Rn2 = Rn * Rn;
+    const seen = new Uint8Array(NS);
+    const mem = [];
+    const stk = [seedSub];
+    seen[seedSub] = 1;
+    while (stk.length && mem.length < 3000) {
+      const u = stk.pop();
+      const dx = cen[u * 3] - sx, dy = cen[u * 3 + 1] - sy, dz = cen[u * 3 + 2] - sz;
+      if (dx * dx + dy * dy + dz * dz > Rn2) continue;
+      mem.push(u);
+      for (let e = start[u]; e < start[u + 1]; e++) {
+        const v = list[e];
+        if (!seen[v]) { seen[v] = 1; stk.push(v); }
+      }
+    }
+    const n = mem.length;
+    if (n < 8) return { ax: 0, ay: 0, az: 1, cx: sx, cy: sy, cz: sz, radius: Rn * 0.5 };
+    let mx = 0, my = 0, mz = 0;
+    for (const u of mem) { mx += cen[u * 3]; my += cen[u * 3 + 1]; mz += cen[u * 3 + 2]; }
+    mx /= n; my /= n; mz /= n;
+    let cxx = 0, cyy = 0, czz = 0, cxy = 0, cxz = 0, cyz = 0;
+    for (const u of mem) {
+      const dx = cen[u * 3] - mx, dy = cen[u * 3 + 1] - my, dz = cen[u * 3 + 2] - mz;
+      cxx += dx * dx; cyy += dy * dy; czz += dz * dz;
+      cxy += dx * dy; cxz += dx * dz; cyz += dy * dz;
+    }
+    // dominant eigenvector via power iteration
+    let vx = 1, vy = 0, vz = 0;
+    if (cyy >= cxx && cyy >= czz) { vx = 0; vy = 1; vz = 0; }
+    else if (czz >= cxx && czz >= cyy) { vx = 0; vy = 0; vz = 1; }
+    for (let k = 0; k < 40; k++) {
+      const nx = cxx * vx + cxy * vy + cxz * vz;
+      const ny = cxy * vx + cyy * vy + cyz * vz;
+      const nz = cxz * vx + cyz * vy + czz * vz;
+      const len = Math.hypot(nx, ny, nz) || 1;
+      vx = nx / len; vy = ny / len; vz = nz / len;
+    }
+    // Snap to vertical when the axis is already nearly vertical — keeps clean
+    // horizontal belts on the torso; clearly-tilted features (ears, tail, limbs)
+    // keep their own axis so the ring wraps them perpendicularly.
+    if (Math.abs(vz) > 0.82) { vx = 0; vy = 0; vz = 1; }
+    // representative cross-section radius (avg perpendicular spread)
+    let r = 0;
+    for (const u of mem) {
+      const dx = cen[u * 3] - mx, dy = cen[u * 3 + 1] - my, dz = cen[u * 3 + 2] - mz;
+      const p = dx * vx + dy * vy + dz * vz;
+      r += Math.hypot(dx - p * vx, dy - p * vy, dz - p * vz);
+    }
+    r /= n;
+    // center on the axis at the clicked cross-section
+    const sp = (sx - mx) * vx + (sy - my) * vy + (sz - mz) * vz;
+    return {
+      ax: vx, ay: vy, az: vz,
+      cx: mx + sp * vx, cy: my + sp * vy, cz: mz + sp * vz,
+      radius: r * 1.15 || Rn * 0.5,
+    };
+  }
+
+  // Band of connected sub-triangles within +/- half along an arbitrary axis.
+  function selectBandAxis(mesh, seedSub, half, ax, ay, az) {
+    const g = buildSubGraph(mesh);
+    const cen = g.cen;
+    const sx = cen[seedSub * 3], sy = cen[seedSub * 3 + 1], sz = cen[seedSub * 3 + 2];
+    const inBand = (i) => {
+      const dx = cen[i * 3] - sx, dy = cen[i * 3 + 1] - sy, dz = cen[i * 3 + 2] - sz;
+      return Math.abs(dx * ax + dy * ay + dz * az) <= half;
+    };
+    return floodAccept(g, seedSub, inBand);
+  }
+
   // Paint the given local sub-triangles to `state`; re-encode affected faces.
   // Does NOT collapse, so the cached graph stays valid for fast repeated paints.
   function applyStates(mesh, subs, state) {
@@ -402,6 +480,8 @@
     fillRegion,
     selectRadius,
     selectBand,
+    selectBandAxis,
+    featureAxis,
     applyStates,
     subSizes,
     invalidateSub,

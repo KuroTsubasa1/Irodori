@@ -30,13 +30,9 @@
     moveRaf = false,
     lastMove = null;
   // brush/ring cursor preview
-  let brushCursor = null,
-    ringCursor = null,
-    cursorType = null,
-    cursorRadius = 1,
-    modelCx = 0,
-    modelCy = 0,
-    modelXYR = 50;
+  let cursorLoop = null,
+    hoverEnabled = false,
+    hoverCb = null;
   const ZUP = new THREE.Vector3(0, 0, 1);
   const tmpV = new THREE.Vector3(),
     tmpQ = new THREE.Quaternion();
@@ -75,9 +71,8 @@
     root = new THREE.Group();
     scene.add(root);
 
-    brushCursor = circleLoop("#ff5d4e");
-    ringCursor = circleLoop("#ff5d4e");
-    scene.add(brushCursor, ringCursor);
+    cursorLoop = circleLoop("#111111");
+    scene.add(cursorLoop);
 
     raycaster = new THREE.Raycaster();
     mouse = new THREE.Vector2();
@@ -97,13 +92,13 @@
       requestAnimationFrame(() => {
         moveRaf = false;
         if (!lastMove) return;
-        const want = painting || cursorType;
+        const want = painting || hoverEnabled;
         const hit = want ? pick(lastMove.x, lastMove.y) : null;
         if (painting && hit && paintCb && paintCb.move) paintCb.move(hit);
-        if (cursorType) updateCursorFromHit(hit);
+        if (hoverEnabled && !painting && hoverCb) hoverCb(hit);
       });
     });
-    el.addEventListener("pointerleave", hideCursors);
+    el.addEventListener("pointerleave", () => { if (hoverCb) hoverCb(null); });
     window.addEventListener("pointerup", (e) => {
       if (painting) {
         painting = false;
@@ -199,33 +194,27 @@
     l.visible = false;
     return l;
   }
-  function hideCursors() {
-    if (brushCursor) brushCursor.visible = false;
-    if (ringCursor) ringCursor.visible = false;
+  function hideCursor() {
+    if (cursorLoop) cursorLoop.visible = false;
   }
-  // Set the hover preview: type 'brush' (disc at cursor) | 'ring' (band) | null.
-  function setCursor(type, radius) {
-    cursorType = type;
-    if (radius) cursorRadius = radius;
-    if (!type) hideCursors();
+  function enableHover(on) {
+    hoverEnabled = on;
+    if (!on) hideCursor();
   }
-  function updateCursorFromHit(hit) {
-    if (!hit) { hideCursors(); return; }
-    if (cursorType === "brush") {
-      ringCursor.visible = false;
-      tmpV.copy(hit.normal).normalize();
-      tmpQ.setFromUnitVectors(ZUP, tmpV);
-      brushCursor.quaternion.copy(tmpQ);
-      brushCursor.position.copy(hit.point).addScaledVector(tmpV, cursorRadius * 0.03);
-      brushCursor.scale.setScalar(cursorRadius);
-      brushCursor.visible = true;
-    } else if (cursorType === "ring") {
-      brushCursor.visible = false;
-      ringCursor.quaternion.identity();
-      ringCursor.position.set(modelCx, modelCy, hit.point.z);
-      ringCursor.scale.setScalar(modelXYR);
-      ringCursor.visible = true;
-    }
+  function onHover(cb) {
+    hoverCb = cb;
+  }
+  // Position the cursor loop at (cx,cy,cz), perpendicular to (ax,ay,az), sized r.
+  function setCursorTransform(cx, cy, cz, ax, ay, az, r) {
+    if (!cursorLoop) return;
+    tmpV.set(ax, ay, az);
+    if (tmpV.lengthSq() < 1e-9) tmpV.set(0, 0, 1);
+    tmpV.normalize();
+    tmpQ.setFromUnitVectors(ZUP, tmpV);
+    cursorLoop.quaternion.copy(tmpQ);
+    cursorLoop.position.set(cx, cy, cz).addScaledVector(tmpV, (r || 1) * 0.02);
+    cursorLoop.scale.setScalar(r || 1);
+    cursorLoop.visible = true;
   }
 
   function onPick(cb) {
@@ -346,12 +335,7 @@
     geom.setAttribute("color", colorAttr);
     geom.computeVertexNormals();
     geom.computeBoundingSphere();
-    geom.computeBoundingBox();
-    const bb = geom.boundingBox;
-    modelCx = (bb.min.x + bb.max.x) / 2;
-    modelCy = (bb.min.y + bb.max.y) / 2;
-    modelXYR = Math.max(bb.max.x - modelCx, bb.max.y - modelCy, 1) * 1.08;
-    hideCursors();
+    hideCursor();
     const mat = new THREE.MeshStandardMaterial({
       vertexColors: true,
       roughness: 0.75,
@@ -405,7 +389,10 @@
     onPick,
     onPaint,
     setTool,
-    setCursor,
+    enableHover,
+    onHover,
+    setCursorTransform,
+    hideCursor,
     paintSubs,
     toGlobalSub,
     subTriangleCount: () => totalSub,
