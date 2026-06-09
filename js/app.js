@@ -14,6 +14,18 @@
   let previewActive = false;
   const HIST_CAP = 60;
 
+  // ---- island-size control (log slider + number box) ----
+  const SIZE_MAX = 50000;
+  const tickToVal = (t) =>
+    Math.min(SIZE_MAX, Math.max(1, Math.round(Math.pow(SIZE_MAX, t / 1000))));
+  const valToTick = (v) =>
+    Math.round((Math.log(Math.min(SIZE_MAX, Math.max(1, v))) / Math.log(SIZE_MAX)) * 1000);
+  const getThreshold = () => Math.min(SIZE_MAX, Math.max(1, +$("sizeNum").value || 1));
+
+  // ---- fill tool ----
+  let fillActive = false;
+  let fillTarget = "auto"; // "auto" or a state string
+
   // ---------- snapshot helpers ----------
   function snap() {
     return doc.meshes.map((m) => ({
@@ -114,6 +126,8 @@
       histIndex = 0;
       previewActive = false;
       buildFilamentUI();
+      buildFillTargets();
+      setFillActive(false);
       updateStats();
       updateHist();
       const nf = doc.meshes.reduce((a, m) => a + m.nf, 0);
@@ -122,7 +136,7 @@
         nf.toLocaleString() + " faces · " +
         Viewer.subTriangleCount().toLocaleString() + " painted sub-triangles · " +
         doc.filaments.length + " filaments";
-      ["filamentCard", "cleanCard", "statsCard", "actionCard"].forEach(
+      ["filamentCard", "cleanCard", "fillCard", "statsCard", "actionCard"].forEach(
         (id) => ($(id).hidden = false)
       );
       $("reframeBtn").hidden = false;
@@ -166,8 +180,73 @@
   }
   const buildFilamentUI = () => buildColorList("filamentList", true, clearPreview);
 
+  // ---------- fill tool ----------
+  function buildFillTargets() {
+    const fc = gatherStates();
+    const list = $("fillTargets");
+    list.innerHTML = "";
+    const add = (key, swatchCss, label) => {
+      const li = document.createElement("li");
+      li.dataset.target = key;
+      const sw = document.createElement("span");
+      sw.className = "swatch";
+      sw.style.flex = "0 0 auto";
+      sw.style.background = swatchCss;
+      const nm = document.createElement("span");
+      nm.className = "fname";
+      nm.textContent = label;
+      const ck = document.createElement("span");
+      ck.className = "check";
+      ck.textContent = "✓";
+      li.append(sw, nm, ck);
+      li.addEventListener("click", () => selectFillTarget(key));
+      list.appendChild(li);
+    };
+    add("auto", "conic-gradient(#888,#bbb,#888)", "Auto (surrounding color)");
+    Object.keys(fc)
+      .map(Number)
+      .sort((a, b) => a - b)
+      .forEach((s) => add(String(s), stateColor(s), colorName(s)));
+    selectFillTarget("auto");
+  }
+  function selectFillTarget(key) {
+    fillTarget = key;
+    document
+      .querySelectorAll("#fillTargets li")
+      .forEach((li) => li.classList.toggle("sel", li.dataset.target === key));
+  }
+  function setFillActive(on) {
+    fillActive = on;
+    Viewer.setPickEnabled(on);
+    const b = $("fillToggle");
+    b.classList.toggle("active", on);
+    b.textContent = on ? "🪣 Fill tool ON — click a patch" : "🪣 Enable fill tool";
+  }
+  function onFillPick(hit) {
+    if (!doc || !fillActive) return;
+    if (previewActive) {
+      restore(current());
+      previewActive = false;
+    }
+    const m = doc.meshes[hit.meshIndex];
+    const target = fillTarget === "auto" ? null : +fillTarget;
+    busy("Filling…", () => {
+      const res = Cleanup.fillRegion(m, hit.localSub, target);
+      if (res.count === 0) {
+        render(null);
+        toast("Nothing to fill there", true);
+        return;
+      }
+      pushHistory("Fill region");
+      render(null);
+      updateStats();
+      toast("Filled " + res.count.toLocaleString() + " sub-triangles");
+    });
+  }
+  Viewer.onPick(onFillPick);
+
   function updateStats() {
-    const thr = +$("sizeRange").value;
+    const thr = getThreshold();
     const sizesAll = {}; // state -> array of component sizes
     for (const m of doc.meshes) {
       const s = Cleanup.subSizes(m);
@@ -196,7 +275,7 @@
   // and returns the changed global-face set for highlighting.
   function runIslands() {
     const removable = removableSet();
-    const maxSize = +$("sizeRange").value;
+    const maxSize = getThreshold();
     let count = 0;
     const changedGlobal = new Set();
     let off = 0;
@@ -249,7 +328,7 @@
         count = runIslands().count;
       }
       previewActive = false;
-      pushHistory("Remove islands (≤" + $("sizeRange").value + ")");
+      pushHistory("Remove islands (≤" + getThreshold() + ")");
       render(null);
       updateStats();
       $("previewInfo").textContent = "";
@@ -309,11 +388,16 @@
     if (e.target.files[0]) loadFile(e.target.files[0]);
   });
   $("sizeRange").addEventListener("input", () => {
-    $("sizeOut").value = $("sizeRange").value;
+    $("sizeNum").value = tickToVal(+$("sizeRange").value);
+    clearPreview();
+  });
+  $("sizeNum").addEventListener("input", () => {
+    $("sizeRange").value = valToTick(+$("sizeNum").value || 1);
     clearPreview();
   });
   $("previewBtn").addEventListener("click", doPreview);
   $("applyBtn").addEventListener("click", doApply);
+  $("fillToggle").addEventListener("click", () => setFillActive(!fillActive));
   $("resetBtn").addEventListener("click", doReset);
   $("undoBtn").addEventListener("click", doUndo);
   $("redoBtn").addEventListener("click", doRedo);

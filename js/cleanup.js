@@ -239,6 +239,69 @@
     return { count, changedFaces };
   }
 
+  /* Manual flood fill: from sub-triangle `seedSub`, flood its connected
+   * same-color region and recolor it. targetState = a state to paint with, or
+   * null to use the surrounding majority color (like auto-cleanup, per click).
+   * Keeps the cached graph valid (no collapse), so repeated fills stay fast.
+   * Returns { count, changedFaces, from, to }. */
+  function fillRegion(mesh, seedSub, targetState) {
+    const g = buildSubGraph(mesh);
+    const { start, list, subLeaf, subFace, trees, NS } = g;
+    if (seedSub < 0 || seedSub >= NS) return { count: 0, changedFaces: new Set() };
+    const seedState = subLeaf[seedSub].state;
+
+    // flood the same-state component
+    const seen = new Uint8Array(NS);
+    const members = [];
+    const stk = [seedSub];
+    seen[seedSub] = 1;
+    while (stk.length) {
+      const u = stk.pop();
+      members.push(u);
+      for (let e = start[u]; e < start[u + 1]; e++) {
+        const v = list[e];
+        if (!seen[v] && subLeaf[v].state === seedState) {
+          seen[v] = 1;
+          stk.push(v);
+        }
+      }
+    }
+
+    let target = targetState;
+    if (target == null) {
+      const votes = new Map();
+      for (let k = 0; k < members.length; k++) {
+        const u = members[k];
+        for (let e = start[u]; e < start[u + 1]; e++) {
+          const v = list[e];
+          if (!seen[v]) votes.set(subLeaf[v].state, (votes.get(subLeaf[v].state) || 0) + 1);
+        }
+      }
+      let best = -1;
+      target = seedState;
+      votes.forEach((n, s) => {
+        if (s !== seedState && (n > best || (n === best && s < target))) {
+          best = n;
+          target = s;
+        }
+      });
+    }
+    if (target === seedState) return { count: 0, changedFaces: new Set() };
+
+    const changedFaces = new Set();
+    for (let k = 0; k < members.length; k++) {
+      subLeaf[members[k]].state = target;
+      changedFaces.add(subFace[members[k]]);
+    }
+    const dom = mesh.dom;
+    changedFaces.forEach((f) => {
+      mesh.paints[f] = Paint.encode(trees[f]); // no collapse -> graph stays valid
+      if (dom) dom[f] = Paint.dominantState(trees[f]);
+    });
+    mesh._subSizes = null; // component sizes changed (graph geometry unchanged)
+    return { count: members.length, changedFaces, from: seedState, to: target };
+  }
+
   /* Per-state sorted component sizes (sub-triangles), cached. Used by stats. */
   function subSizes(mesh) {
     if (mesh._subSizes) return mesh._subSizes;
@@ -264,6 +327,7 @@
     computeDominant,
     buildSubGraph,
     removeIslandsSub,
+    fillRegion,
     subSizes,
     invalidateSub,
   };

@@ -18,7 +18,12 @@ Everything runs locally in your browser. Nothing is uploaded.
    pink), then **Apply**.
 4. Use the **Filaments** checkboxes to control which colors are allowed to be
    removed (e.g. untick a color to protect small intentional details of it).
-5. Click **Export corrected .3mf** to download `<name>_fixed.3mf`. Open it back
+   The size slider is logarithmic; type an exact value (up to 50000) in the box
+   to reach bigger stray patches.
+5. For anything automatic cleanup misses, use the **Fill tool**: enable it, pick
+   a fill color (or *Auto*), and click the patch — its whole connected region is
+   recolored. Dragging still rotates the model.
+6. Click **Export corrected .3mf** to download `<name>_fixed.3mf`. Open it back
    in Bambu Studio.
 
 **Undo / Redo** (buttons or ⌘/Ctrl-Z and ⌘/Ctrl-Shift-Z) step through your full
@@ -46,6 +51,14 @@ On the reference model, red fragments into **12,288 connected regions**; cleanup
 at size 60 reassigns ~31,000 stray sub-triangles and leaves about **100** real
 red regions (the ball and large patches). Only the leaves that change are
 rewritten and their face re-encoded; everything else is preserved exactly.
+
+## Fill tool
+
+The fill tool reuses the same sub-triangle graph for manual fixes. A ray cast
+from your click finds the sub-triangle under the cursor; the tool floods its
+connected same-color region and recolors it — to a color you pick, or to the
+surrounding majority (*Auto*). Each click is one undo step. Because a recolor
+doesn't change geometry, the graph stays cached, so repeated fills are instant.
 
 ## The `paint_color` format (reverse-engineered)
 

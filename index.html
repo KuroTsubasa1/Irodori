@@ -33,17 +33,26 @@
           <h2>Island cleanup</h2>
           <label class="row">
             <span>Max island size</span>
-            <input type="range" id="sizeRange" min="1" max="1000" value="60" />
-            <output id="sizeOut">60</output>
+            <input type="range" id="sizeRange" min="0" max="1000" value="378" />
+            <input type="number" id="sizeNum" min="1" max="50000" value="60" />
           </label>
           <p class="hint">Connected single-color <b>sub-triangle</b> regions of
-            this size or smaller are recolored to the color they border most —
-            this catches stray color painted on part of a boundary face.</p>
+            this size or smaller are recolored to the color they border most.
+            Slider is logarithmic; type an exact value in the box (up to 50000).</p>
           <div class="btnrow">
             <button id="previewBtn" class="secondary">👁 Preview</button>
             <button id="applyBtn" class="primary">✓ Apply</button>
           </div>
           <div id="previewInfo" class="muted"></div>
+        </section>
+
+        <section class="card" id="fillCard" hidden>
+          <h2>Fill tool</h2>
+          <button id="fillToggle" class="secondary">🪣 Enable fill tool</button>
+          <p class="hint">When on, <b>click</b> a wrong-color patch to flood-fill
+            its whole region. Dragging still rotates the model.</p>
+          <div class="muted" style="margin:6px 0 4px">Fill with:</div>
+          <ul id="fillTargets"></ul>
         </section>
 
         <section class="card" id="statsCard" hidden>

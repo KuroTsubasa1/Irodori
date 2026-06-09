@@ -17,7 +17,14 @@
   let triState = null; // Int32Array: state of each sub-triangle
   let faceStart = null; // Int32Array(totalFaces+1): sub-tri range per global face
   let meshFaceOffset = []; // global face offset per mesh
+  let meshSubOffset = []; // global sub-triangle offset per mesh (+sentinel)
   let totalSub = 0;
+
+  // picking
+  let raycaster, mouse;
+  let pickEnabled = false,
+    pickCb = null,
+    pointerDown = null;
 
   const HIGHLIGHT = new THREE.Color("#ff00e6").convertSRGBToLinear();
 
@@ -45,8 +52,54 @@
     scene.add(d2);
     root = new THREE.Group();
     scene.add(root);
+
+    raycaster = new THREE.Raycaster();
+    mouse = new THREE.Vector2();
+    const el = renderer.domElement;
+    el.addEventListener("pointerdown", (e) => {
+      pointerDown = { x: e.clientX, y: e.clientY };
+    });
+    el.addEventListener("pointerup", (e) => {
+      const d = pointerDown;
+      pointerDown = null;
+      if (!pickEnabled || !pickCb || !d) return;
+      const dx = e.clientX - d.x,
+        dy = e.clientY - d.y;
+      if (dx * dx + dy * dy > 36) return; // a drag (rotate), not a click
+      const hit = pick(e.clientX, e.clientY);
+      if (hit) pickCb(hit);
+    });
+
     window.addEventListener("resize", () => onResize(container));
     animate();
+  }
+
+  // Raycast the mesh; returns { meshIndex, localSub, state, point } or null.
+  function pick(clientX, clientY) {
+    if (!meshObj) return null;
+    const rect = renderer.domElement.getBoundingClientRect();
+    mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+    mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+    raycaster.setFromCamera(mouse, camera);
+    const hits = raycaster.intersectObject(meshObj, false);
+    if (!hits.length) return null;
+    const gsub = hits[0].faceIndex; // one geometry triangle == one sub-triangle
+    let mi = 0;
+    while (mi + 2 < meshSubOffset.length && meshSubOffset[mi + 1] <= gsub) mi++;
+    return {
+      meshIndex: mi,
+      localSub: gsub - meshSubOffset[mi],
+      state: triState[gsub],
+      point: hits[0].point,
+    };
+  }
+
+  function setPickEnabled(b) {
+    pickEnabled = b;
+    if (renderer) renderer.domElement.style.cursor = b ? "crosshair" : "";
+  }
+  function onPick(cb) {
+    pickCb = cb;
   }
 
   function onResize(container) {
@@ -85,10 +138,12 @@
     // count total faces and sub-triangles; cache per-face solid/tree
     let totalFaces = 0;
     meshFaceOffset = [];
+    meshSubOffset = [];
     const meshTrees = []; // per mesh: { solid:Int32Array(-1|state), tree:Array }
     totalSub = 0;
     for (const m of doc.meshes) {
       meshFaceOffset.push(totalFaces);
+      meshSubOffset.push(totalSub);
       totalFaces += m.nf;
       const solid = new Int32Array(m.nf);
       const trees = new Array(m.nf);
@@ -107,6 +162,7 @@
       }
       meshTrees.push({ solid, trees });
     }
+    meshSubOffset.push(totalSub); // sentinel
 
     const positions = new Float32Array(totalSub * 9);
     triState = new Int32Array(totalSub);
@@ -208,6 +264,9 @@
     build,
     setHighlight,
     frame,
+    pick,
+    setPickEnabled,
+    onPick,
     subTriangleCount: () => totalSub,
   };
 })(window);
