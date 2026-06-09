@@ -1,145 +1,209 @@
-/* cleanup.js — color-correction operations over a painted mesh.
+/* cleanup.js — sub-triangle-level color correction.
  *
- * Two operations:
- *   removeIslands  — find connected same-color regions and reassign the small
- *                    ones (<= maxFaces) to the surrounding majority color.
- *                    Removes stray blobs and short lines of a wrong color.
- *   removeSlivers  — inside boundary (subdivided) faces, drop sub-triangles of
- *                    a chosen color when they are a minority, replacing them
- *                    with the face's dominant color. Cleans thin color seams.
+ * The slicer paints individual sub-triangles, so stray color often lives on
+ * PART of a boundary face. We therefore tessellate every face into its leaf
+ * sub-triangles, build an adjacency graph across them (resolving T-junctions,
+ * where a split face borders a less-subdivided one), find connected same-color
+ * regions, and recolor the small ones to the color they border most.
  *
- * The mesh keeps two parallel views, both updated by these ops:
- *   mesh.dom    Int32Array  — dominant state per face (drives the 3D colors)
- *   mesh.paints string[]    — paint_color codes (drives .3mf export)
+ * The graph is cached on the mesh (mesh._sub) and invalidated whenever paints
+ * change. Each sub-triangle holds a reference to its leaf node, so a reassigned
+ * color is written straight back into the paint tree and re-encoded.
  */
 (function (global) {
   "use strict";
 
+  const QSCALE = 100000; // coordinate quantization for vertex welding
+  const q = (v) => Math.round(v * QSCALE);
+
+  // dominant filament per face (for the filament-count list / swatches)
   function computeDominant(mesh) {
     if (mesh.dom) return mesh.dom;
-    const nf = mesh.nf;
-    const dom = new Int32Array(nf);
-    for (let i = 0; i < nf; i++) {
-      const p = mesh.paints[i];
-      const s = Paint.solidState(p);
-      dom[i] = s >= 0 ? s : Paint.dominantState(Paint.decode(p));
+    const dom = new Int32Array(mesh.nf);
+    for (let i = 0; i < mesh.nf; i++) {
+      const s = Paint.solidState(mesh.paints[i]);
+      dom[i] = s >= 0 ? s : Paint.dominantState(Paint.decode(mesh.paints[i]));
     }
     mesh.dom = dom;
     return dom;
   }
 
-  // CSR adjacency over original faces (neighbors share an edge).
-  function buildAdjacency(mesh) {
-    if (mesh.adj) return mesh.adj;
+  function invalidateSub(mesh) {
+    mesh._sub = null;
+    mesh._subSizes = null;
+  }
+
+  // Build (or return cached) the sub-triangle adjacency graph for a mesh.
+  function buildSubGraph(mesh) {
+    if (mesh._sub) return mesh._sub;
     const nf = mesh.nf,
-      nv = mesh.nv;
-    const v1 = mesh.v1,
-      v2 = mesh.v2,
-      v3 = mesh.v3;
-    const edgeMap = new Map(); // key -> faceIndex (first occupant)
-    // count neighbors first for CSR sizing
-    const deg = new Int32Array(nf);
-    const pairs = []; // flat [faceA, faceB, ...]
-    function edge(a, b, f) {
-      const key = a < b ? a * nv + b : b * nv + a;
-      const prev = edgeMap.get(key);
-      if (prev === undefined) {
-        edgeMap.set(key, f);
-      } else {
-        pairs.push(prev, f);
-        deg[prev]++;
-        deg[f]++;
-        edgeMap.set(key, -1); // mark used (ignore further faces on this edge)
+      P = mesh.positions;
+
+    // decode trees and count sub-triangles
+    const trees = new Array(nf);
+    let NS = 0;
+    for (let f = 0; f < nf; f++) {
+      const t = Paint.decode(mesh.paints[f]);
+      trees[f] = t;
+      NS += Paint.leafCount(t);
+    }
+
+    const subLeaf = new Array(NS);
+    const subFace = new Int32Array(NS);
+    const sv = new Int32Array(NS * 3); // 3 vertex ids per sub-triangle
+
+    // vertex welding
+    const vmap = new Map();
+    const cx = [],
+      cy = [],
+      cz = [];
+    function pid(x, y, z) {
+      const k = q(x) + "_" + q(y) + "_" + q(z);
+      let id = vmap.get(k);
+      if (id === undefined) {
+        id = cx.length;
+        vmap.set(k, id);
+        cx.push(x); cy.push(y); cz.push(z);
+      }
+      return id;
+    }
+
+    let t = 0;
+    for (let f = 0; f < nf; f++) {
+      const a = mesh.v1[f] * 3,
+        b = mesh.v2[f] * 3,
+        c = mesh.v3[f] * 3;
+      Paint.tessellate(
+        trees[f], P[a], P[a + 1], P[a + 2], P[b], P[b + 1], P[b + 2], P[c], P[c + 1], P[c + 2],
+        (leaf, x0, y0, z0, x1, y1, z1, x2, y2, z2) => {
+          subLeaf[t] = leaf;
+          subFace[t] = f;
+          sv[t * 3] = pid(x0, y0, z0);
+          sv[t * 3 + 1] = pid(x1, y1, z1);
+          sv[t * 3 + 2] = pid(x2, y2, z2);
+          t += 1;
+        }
+      );
+    }
+    const NV = cx.length;
+
+    // midpoint lookup: id of the midpoint vertex of (u,v), or -1
+    const midOf = (u, v) => {
+      const k =
+        q((cx[u] + cx[v]) / 2) + "_" + q((cy[u] + cy[v]) / 2) + "_" + q((cz[u] + cz[v]) / 2);
+      const m = vmap.get(k);
+      return m === undefined ? -1 : m;
+    };
+
+    // register adjacency, splitting an edge at any existing midpoint (T-junctions)
+    const edge = new Map(); // key -> first sub-tri, or -1 once paired
+    const adjA = [],
+      adjB = [];
+    function reg(ti, u, v) {
+      const key = u < v ? u * NV + v : v * NV + u;
+      const p = edge.get(key);
+      if (p === undefined) edge.set(key, ti);
+      else if (p >= 0 && p !== ti) {
+        adjA.push(p); adjB.push(ti);
+        edge.set(key, -1);
       }
     }
-    for (let f = 0; f < nf; f++) {
-      const a = v1[f],
-        b = v2[f],
-        c = v3[f];
-      edge(a, b, f);
-      edge(b, c, f);
-      edge(a, c, f);
+    function atomic(ti, u, v) {
+      const m = midOf(u, v);
+      if (m >= 0 && m !== u && m !== v) {
+        atomic(ti, u, m);
+        atomic(ti, m, v);
+      } else reg(ti, u, v);
     }
-    const start = new Int32Array(nf + 1);
-    for (let f = 0; f < nf; f++) start[f + 1] = start[f] + deg[f];
-    const list = new Int32Array(start[nf]);
-    const cur = start.slice(0, nf);
-    for (let i = 0; i < pairs.length; i += 2) {
-      const a = pairs[i],
-        b = pairs[i + 1];
+    for (let i = 0; i < NS; i++) {
+      const a = sv[i * 3],
+        b = sv[i * 3 + 1],
+        c = sv[i * 3 + 2];
+      atomic(i, a, b);
+      atomic(i, b, c);
+      atomic(i, c, a);
+    }
+
+    // CSR
+    const deg = new Int32Array(NS);
+    for (let i = 0; i < adjA.length; i++) {
+      deg[adjA[i]]++; deg[adjB[i]]++;
+    }
+    const start = new Int32Array(NS + 1);
+    for (let i = 0; i < NS; i++) start[i + 1] = start[i] + deg[i];
+    const list = new Int32Array(start[NS]);
+    const cur = start.slice(0, NS);
+    for (let i = 0; i < adjA.length; i++) {
+      const a = adjA[i],
+        b = adjB[i];
       list[cur[a]++] = b;
       list[cur[b]++] = a;
     }
-    mesh.adj = { start, list };
-    return mesh.adj;
+
+    mesh._sub = { start, list, subLeaf, subFace, trees, NS };
+    return mesh._sub;
   }
 
-  function setSolid(mesh, i, state) {
-    mesh.dom[i] = state;
-    mesh.paints[i] = state === 0 ? "" : Paint.encode({ leaf: true, state: state });
+  // Flood the same-state component containing `seed`; returns member indices.
+  function floodComponent(start, list, state, comp, seed, scratch) {
+    const st = state[seed];
+    const members = [];
+    let sp = 0,
+      s = scratch.stk;
+    s[sp++] = seed;
+    comp[seed] = seed;
+    while (sp > 0) {
+      const u = s[--sp];
+      members.push(u);
+      for (let e = start[u]; e < start[u + 1]; e++) {
+        const v = list[e];
+        if (comp[v] === -1 && state[v] === st) {
+          comp[v] = seed;
+          if (sp >= s.length) {
+            const ns = new Int32Array(s.length * 2);
+            ns.set(s);
+            s = scratch.stk = ns;
+          }
+          s[sp++] = v;
+        }
+      }
+    }
+    return members;
   }
 
-  /* Connected-component island removal.
-   * opts: { maxFaces, removable:Set<state>, passes }
-   * Returns { count, changed:[faceIndex], details:[{face,from,to}] }. */
-  function removeIslands(mesh, opts) {
-    const dom = computeDominant(mesh);
-    const { start, list } = buildAdjacency(mesh);
-    const nf = mesh.nf;
-    const maxFaces = opts.maxFaces;
-    const removable = opts.removable; // Set of states allowed to be removed
-    const passes = opts.passes || 5;
+  /* Remove small same-color sub-triangle islands.
+   * opts: { maxSize, removable:Set<state>, passes }
+   * Returns { count, changedFaces:Set }. Mutates mesh.paints/dom in place. */
+  function removeIslandsSub(mesh, opts) {
+    const g = buildSubGraph(mesh);
+    const { start, list, subLeaf, subFace, trees, NS } = g;
+    const maxSize = opts.maxSize,
+      removable = opts.removable,
+      passes = opts.passes || 3;
 
-    const allChanged = new Map(); // face -> from-state (first time it changed)
-    const stack = new Int32Array(64);
+    const state = new Int32Array(NS);
+    for (let i = 0; i < NS; i++) state[i] = subLeaf[i].state;
+
+    const comp = new Int32Array(NS);
+    const scratch = { stk: new Int32Array(1024) };
 
     for (let pass = 0; pass < passes; pass++) {
-      const snap = dom.slice(); // components computed from a stable snapshot
-      const comp = new Int32Array(nf).fill(-1);
-      let changedThisPass = 0;
-
-      for (let seed = 0; seed < nf; seed++) {
+      comp.fill(-1);
+      let changed = 0;
+      for (let seed = 0; seed < NS; seed++) {
         if (comp[seed] !== -1) continue;
-        const st = snap[seed];
-        // flood the component
-        const members = [];
-        let sp = 0;
-        let s = stack;
-        s[sp++] = seed;
-        comp[seed] = seed;
-        while (sp > 0) {
-          const u = s[--sp];
-          members.push(u);
-          for (let e = start[u]; e < start[u + 1]; e++) {
-            const v = list[e];
-            if (comp[v] === -1 && snap[v] === st) {
-              comp[v] = seed;
-              if (sp >= s.length) {
-                const ns = new Int32Array(s.length * 2);
-                ns.set(s);
-                s = ns;
-              }
-              s[sp++] = v;
-            }
-          }
-        }
-
-        if (members.length > maxFaces) continue;
-        if (!removable.has(st)) continue;
-
-        // tally surrounding states (by shared-edge count) outside the component
+        const st = state[seed];
+        const members = floodComponent(start, list, state, comp, seed, scratch);
+        if (members.length > maxSize || !removable.has(st)) continue;
+        // vote on surrounding color (by shared sub-edge count)
         const votes = new Map();
         for (let k = 0; k < members.length; k++) {
           const u = members[k];
           for (let e = start[u]; e < start[u + 1]; e++) {
             const v = list[e];
-            if (comp[v] !== seed) {
-              const vs = snap[v];
-              votes.set(vs, (votes.get(vs) || 0) + 1);
-            }
+            if (comp[v] !== seed) votes.set(state[v], (votes.get(state[v]) || 0) + 1);
           }
         }
-        if (votes.size === 0) continue; // floating region, nothing to merge into
         let target = -1,
           best = -1;
         votes.forEach((n, vs) => {
@@ -149,105 +213,58 @@
           }
         });
         if (target === -1) continue;
-
-        for (let k = 0; k < members.length; k++) {
-          const u = members[k];
-          if (!allChanged.has(u)) allChanged.set(u, st);
-          setSolid(mesh, u, target);
-          changedThisPass++;
-        }
+        for (let k = 0; k < members.length; k++) state[members[k]] = target;
+        changed += members.length;
       }
-      if (changedThisPass === 0) break;
+      if (changed === 0) break;
     }
 
-    const changed = [];
-    const details = [];
-    allChanged.forEach((from, face) => {
-      changed.push(face);
-      details.push({ face, from, to: dom[face] });
+    // write back changed states into the paint trees and re-encode
+    const changedFaces = new Set();
+    let count = 0;
+    for (let i = 0; i < NS; i++) {
+      if (state[i] !== subLeaf[i].state) {
+        subLeaf[i].state = state[i];
+        changedFaces.add(subFace[i]);
+        count++;
+      }
+    }
+    const dom = mesh.dom;
+    changedFaces.forEach((f) => {
+      const col = Paint.collapseIfUniform(trees[f]);
+      mesh.paints[f] = Paint.encode(col);
+      if (dom) dom[f] = Paint.dominantState(col);
     });
-    return { count: changed.length, changed, details };
+    invalidateSub(mesh);
+    return { count, changedFaces };
   }
 
-  /* Sub-triangle sliver removal: in subdivided faces, replace minority
-   * sub-triangles whose state is in `targets` with the face's dominant state.
-   * opts: { targets:Set<state> }. */
-  function removeSlivers(mesh, opts) {
-    const dom = computeDominant(mesh);
-    const targets = opts.targets;
-    const nf = mesh.nf;
-    const changed = [];
-    for (let i = 0; i < nf; i++) {
-      const p = mesh.paints[i];
-      if (Paint.solidState(p) >= 0) continue; // not subdivided
-      const tree = Paint.decode(p);
-      const counts = {};
-      Paint.addLeafCounts(tree, counts);
-      const d = mesh.dom[i];
-      // does it contain a minority target?
-      let hit = false;
-      targets.forEach((t) => {
-        if (t !== d && counts[t] && counts[t] < (counts[d] || 0)) hit = true;
-      });
-      if (!hit) continue;
-      const mapped = Paint.remapLeaves(tree, (s) =>
-        targets.has(s) && s !== d && (counts[s] || 0) < (counts[d] || 0) ? d : s
-      );
-      const collapsed = Paint.collapseIfUniform(mapped);
-      mesh.paints[i] = Paint.encode(collapsed);
-      mesh.dom[i] = Paint.dominantState(collapsed);
-      changed.push(i);
-    }
-    return { count: changed.length, changed };
-  }
-
-  /* Stats: face counts and component summary per state. */
-  function stats(mesh, smallThreshold) {
-    const dom = computeDominant(mesh);
-    const { start, list } = buildAdjacency(mesh);
-    const nf = mesh.nf;
-    const faceCount = {};
-    for (let i = 0; i < nf; i++) faceCount[dom[i]] = (faceCount[dom[i]] || 0) + 1;
-
-    const comp = new Int32Array(nf).fill(-1);
-    const small = {}; // state -> number of small components
-    const total = {}; // state -> total components
-    let stk = new Int32Array(64);
-    for (let seed = 0; seed < nf; seed++) {
+  /* Per-state sorted component sizes (sub-triangles), cached. Used by stats. */
+  function subSizes(mesh) {
+    if (mesh._subSizes) return mesh._subSizes;
+    const g = buildSubGraph(mesh);
+    const { start, list, subLeaf, NS } = g;
+    const state = new Int32Array(NS);
+    for (let i = 0; i < NS; i++) state[i] = subLeaf[i].state;
+    const comp = new Int32Array(NS).fill(-1);
+    const scratch = { stk: new Int32Array(1024) };
+    const sizes = {};
+    for (let seed = 0; seed < NS; seed++) {
       if (comp[seed] !== -1) continue;
-      const st = dom[seed];
-      let sp = 0,
-        sz = 0;
-      stk[sp++] = seed;
-      comp[seed] = seed;
-      while (sp > 0) {
-        const u = stk[--sp];
-        sz++;
-        for (let e = start[u]; e < start[u + 1]; e++) {
-          const v = list[e];
-          if (comp[v] === -1 && dom[v] === st) {
-            comp[v] = seed;
-            if (sp >= stk.length) {
-              const ns = new Int32Array(stk.length * 2);
-              ns.set(stk);
-              stk = ns;
-            }
-            stk[sp++] = v;
-          }
-        }
-      }
-      total[st] = (total[st] || 0) + 1;
-      if (sz <= smallThreshold) small[st] = (small[st] || 0) + 1;
+      const st = state[seed];
+      const members = floodComponent(start, list, state, comp, seed, scratch);
+      (sizes[st] || (sizes[st] = [])).push(members.length);
     }
-    return { faceCount, small, total };
+    for (const k in sizes) sizes[k].sort((a, b) => b - a);
+    mesh._subSizes = sizes;
+    return sizes;
   }
 
   global.Cleanup = {
     computeDominant,
-    buildAdjacency,
-    removeIslands,
-    removeSlivers,
-    stats,
-    setSolid,
+    buildSubGraph,
+    removeIslandsSub,
+    subSizes,
+    invalidateSub,
   };
 })(window);

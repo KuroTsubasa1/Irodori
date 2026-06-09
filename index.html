@@ -33,25 +33,17 @@
           <h2>Island cleanup</h2>
           <label class="row">
             <span>Max island size</span>
-            <input type="range" id="sizeRange" min="1" max="400" value="50" />
-            <output id="sizeOut">50</output>
+            <input type="range" id="sizeRange" min="1" max="1000" value="60" />
+            <output id="sizeOut">60</output>
           </label>
-          <p class="hint">Connected single-color regions with this many faces or
-            fewer are recolored to the surrounding color.</p>
+          <p class="hint">Connected single-color <b>sub-triangle</b> regions of
+            this size or smaller are recolored to the color they border most —
+            this catches stray color painted on part of a boundary face.</p>
           <div class="btnrow">
             <button id="previewBtn" class="secondary">👁 Preview</button>
             <button id="applyBtn" class="primary">✓ Apply</button>
           </div>
           <div id="previewInfo" class="muted"></div>
-        </section>
-
-        <section class="card" id="sliverCard" hidden>
-          <h2>Boundary seam cleanup <span class="adv">advanced</span></h2>
-          <p class="hint">In subdivided boundary faces, drop thin sub-triangles
-            of the ticked colors when they're a minority on that face.</p>
-          <ul id="sliverList"></ul>
-          <button id="sliverBtn" class="secondary">Clean seams</button>
-          <div id="sliverInfo" class="muted"></div>
         </section>
 
         <section class="card" id="statsCard" hidden>

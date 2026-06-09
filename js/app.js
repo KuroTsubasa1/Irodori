@@ -25,6 +25,7 @@
     doc.meshes.forEach((m, i) => {
       m.paints = state[i].paints.slice();
       m.dom = Int32Array.from(state[i].dom);
+      Cleanup.invalidateSub(m); // paints changed -> sub-triangle graph is stale
     });
   }
   const current = () => history[histIndex].state;
@@ -68,6 +69,18 @@
     clearTimeout(toast._t);
     toast._t = setTimeout(() => (t.hidden = true), 2600);
   }
+  // Show a message, let it paint, then run the (blocking) work.
+  function busy(msg, fn) {
+    toast(msg);
+    setTimeout(() => {
+      try {
+        fn();
+      } catch (e) {
+        console.error(e);
+        toast("Error: " + e.message, true);
+      }
+    }, 30);
+  }
   function gatherStates() {
     const fc = {};
     for (const m of doc.meshes) {
@@ -80,13 +93,6 @@
     const set = new Set();
     document
       .querySelectorAll("#filamentList input[data-state]:checked")
-      .forEach((cb) => set.add(+cb.dataset.state));
-    return set;
-  }
-  function sliverTargets() {
-    const set = new Set();
-    document
-      .querySelectorAll("#sliverList input[data-state]:checked")
       .forEach((cb) => set.add(+cb.dataset.state));
     return set;
   }
@@ -108,7 +114,6 @@
       histIndex = 0;
       previewActive = false;
       buildFilamentUI();
-      buildSliverUI();
       updateStats();
       updateHist();
       const nf = doc.meshes.reduce((a, m) => a + m.nf, 0);
@@ -117,7 +122,7 @@
         nf.toLocaleString() + " faces · " +
         Viewer.subTriangleCount().toLocaleString() + " painted sub-triangles · " +
         doc.filaments.length + " filaments";
-      ["filamentCard", "cleanCard", "sliverCard", "statsCard", "actionCard"].forEach(
+      ["filamentCard", "cleanCard", "statsCard", "actionCard"].forEach(
         (id) => ($(id).hidden = false)
       );
       $("reframeBtn").hidden = false;
@@ -160,22 +165,19 @@
       });
   }
   const buildFilamentUI = () => buildColorList("filamentList", true, clearPreview);
-  const buildSliverUI = () => buildColorList("sliverList", false, null);
 
   function updateStats() {
     const thr = +$("sizeRange").value;
-    const fcAll = {},
-      smallAll = {};
+    const sizesAll = {}; // state -> array of component sizes
     for (const m of doc.meshes) {
-      const s = Cleanup.stats(m, thr);
-      for (const k in s.faceCount) fcAll[k] = (fcAll[k] || 0) + s.faceCount[k];
-      for (const k in s.small) smallAll[k] = (smallAll[k] || 0) + s.small[k];
+      const s = Cleanup.subSizes(m);
+      for (const k in s) (sizesAll[k] || (sizesAll[k] = [])).push(...s[k]);
     }
-    const rows = Object.keys(fcAll)
+    const rows = Object.keys(sizesAll)
       .map(Number)
       .sort((a, b) => a - b)
       .map((s) => {
-        const small = smallAll[s] || 0;
+        const small = sizesAll[s].filter((x) => x <= thr).length;
         return (
           '<div class="row" style="gap:8px;margin:3px 0">' +
           '<span class="swatch" style="flex:0 0 auto;background:' + stateColor(s) + '"></span>' +
@@ -185,29 +187,25 @@
       })
       .join("");
     $("statsBody").innerHTML =
-      rows + '<p class="hint" style="margin-top:8px">“small” = regions ≤ ' +
-      thr + " faces (current threshold).</p>";
+      rows + '<p class="hint" style="margin-top:8px">“small” = sub-triangle regions ≤ ' +
+      thr + " (current threshold).</p>";
   }
 
   // ---------- cleanup ops ----------
-  // Runs island removal in place (mesh must already hold current() state) and
-  // returns the changed global-face set by diffing against current().
+  // Runs sub-triangle island removal in place (mesh must hold current() state)
+  // and returns the changed global-face set for highlighting.
   function runIslands() {
     const removable = removableSet();
-    const maxFaces = +$("sizeRange").value;
+    const maxSize = +$("sizeRange").value;
     let count = 0;
-    for (const m of doc.meshes)
-      count += Cleanup.removeIslands(m, { maxFaces, removable, passes: 8 }).count;
-
-    const cur = current();
     const changedGlobal = new Set();
     let off = 0;
-    doc.meshes.forEach((m, mi) => {
-      const prev = cur[mi].paints;
-      for (let i = 0; i < m.nf; i++)
-        if (m.paints[i] !== prev[i]) changedGlobal.add(off + i);
+    for (const m of doc.meshes) {
+      const res = Cleanup.removeIslandsSub(m, { maxSize, removable, passes: 3 });
+      count += res.count;
+      res.changedFaces.forEach((f) => changedGlobal.add(off + f));
       off += m.nf;
-    });
+    }
     return { count, changedGlobal };
   }
 
@@ -222,47 +220,41 @@
     updateStats();
   }
 
+  let previewResult = null; // { count } of the active preview
+
   function doPreview() {
     if (!doc) return;
-    restore(current());
-    const { count, changedGlobal } = runIslands();
-    previewActive = true;
-    render(changedGlobal);
-    $("previewInfo").innerHTML =
-      count === 0
-        ? "Nothing to remove at this threshold."
-        : "<b>" + count.toLocaleString() +
-          "</b> faces will change (shown in <b style='color:#ff00e6'>pink</b>). Click Apply to keep.";
+    busy("Analyzing sub-triangles…", () => {
+      if (previewActive) restore(current()); // clear a prior preview first
+      const { count, changedGlobal } = runIslands();
+      previewActive = true;
+      previewResult = { count };
+      render(changedGlobal);
+      $("previewInfo").innerHTML =
+        count === 0
+          ? "Nothing to remove at this threshold."
+          : "<b>" + count.toLocaleString() +
+            "</b> sub-triangles will change (shown in <b style='color:#ff00e6'>pink</b>). Click Apply to keep.";
+    });
   }
 
   function doApply() {
     if (!doc) return;
-    restore(current());
-    const { count } = runIslands();
-    previewActive = false;
-    pushHistory("Remove islands (≤" + $("sizeRange").value + ")");
-    render(null);
-    updateStats();
-    $("previewInfo").textContent = "";
-    toast(count === 0 ? "No islands to remove" : "Removed " + count.toLocaleString() + " island faces");
-  }
-
-  function doSlivers() {
-    if (!doc) return;
-    const targets = sliverTargets();
-    if (targets.size === 0) {
-      toast("Tick at least one color first", true);
-      return;
-    }
-    restore(current());
-    let count = 0;
-    for (const m of doc.meshes) count += Cleanup.removeSlivers(m, { targets }).count;
-    previewActive = false;
-    pushHistory("Clean seams");
-    render(null);
-    updateStats();
-    $("sliverInfo").textContent =
-      count === 0 ? "No seams matched." : "Cleaned " + count.toLocaleString() + " boundary faces.";
+    busy("Applying…", () => {
+      let count;
+      if (previewActive) {
+        count = previewResult ? previewResult.count : 0; // mesh already previewed
+      } else {
+        restore(current());
+        count = runIslands().count;
+      }
+      previewActive = false;
+      pushHistory("Remove islands (≤" + $("sizeRange").value + ")");
+      render(null);
+      updateStats();
+      $("previewInfo").textContent = "";
+      toast(count === 0 ? "Nothing to remove" : "Removed " + count.toLocaleString() + " stray sub-triangles");
+    });
   }
 
   function doReset() {
@@ -273,7 +265,6 @@
     render(null);
     updateStats();
     $("previewInfo").textContent = "";
-    $("sliverInfo").textContent = "";
     toast("Reverted to original");
   }
 
@@ -323,7 +314,6 @@
   });
   $("previewBtn").addEventListener("click", doPreview);
   $("applyBtn").addEventListener("click", doApply);
-  $("sliverBtn").addEventListener("click", doSlivers);
   $("resetBtn").addEventListener("click", doReset);
   $("undoBtn").addEventListener("click", doUndo);
   $("redoBtn").addEventListener("click", doRedo);

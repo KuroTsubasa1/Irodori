@@ -14,13 +14,11 @@ Everything runs locally in your browser. Nothing is uploaded.
 2. **Load a .3mf** (button or drag-and-drop). The model appears in 3D — drag to
    rotate, scroll to zoom.
 3. In **Island cleanup**, set *Max island size* (how big a wrong-color patch can
-   be and still get removed), click **Preview** (changed faces flash pink), then
-   **Apply**.
+   be and still get removed), click **Preview** (changed sub-triangles flash
+   pink), then **Apply**.
 4. Use the **Filaments** checkboxes to control which colors are allowed to be
    removed (e.g. untick a color to protect small intentional details of it).
-5. *(optional)* **Boundary seam cleanup** removes thin sub-triangle slivers of a
-   chosen color sitting inside two-color boundary faces.
-6. Click **Export corrected .3mf** to download `<name>_fixed.3mf`. Open it back
+5. Click **Export corrected .3mf** to download `<name>_fixed.3mf`. Open it back
    in Bambu Studio.
 
 **Undo / Redo** (buttons or ⌘/Ctrl-Z and ⌘/Ctrl-Shift-Z) step through your full
@@ -29,16 +27,25 @@ ever changes colors, never geometry.
 
 ## How the cleanup works
 
-Each triangle's color is read, then faces are grouped into connected same-color
-regions (sharing an edge). A genuine feature — e.g. the red ball — is one large
-region; quantization artifacts are hundreds of tiny regions. Any region with
-*≤ Max island size* faces is recolored to the color it borders most. On the
-reference Pikachu model this turns **488 stray red patches into 0** while keeping
-the two large red ball regions untouched.
+The slicer paints individual **sub-triangles**, so a stray color usually lives on
+just *part* of a boundary face — a yellow/black face with a thin red sliver
+through it. Working at the face level can't fix that, so the tool operates on
+sub-triangles:
 
-Only the faces that actually change are rewritten (as a solid color). Every
-untouched face — including the careful sub-triangle painting along real
-boundaries — is preserved exactly in the exported file.
+1. Every face is tessellated into its leaf sub-triangles (the exact pieces the
+   slicer paints).
+2. A graph connects sub-triangles that share an edge. Where a subdivided face
+   borders a less-subdivided one the edges don't line up (a *T-junction*); these
+   are resolved by splitting the coarse edge at the neighbor's midpoints, so
+   connectivity is correct.
+3. Same-color regions are found as connected components. A real feature (the red
+   ball) is one big region; artifacts are thousands of tiny ones. Any region of
+   *≤ Max island size* sub-triangles is recolored to the color it borders most.
+
+On the reference model, red fragments into **12,288 connected regions**; cleanup
+at size 60 reassigns ~31,000 stray sub-triangles and leaves about **100** real
+red regions (the ball and large patches). Only the leaves that change are
+rewritten and their face re-encoded; everything else is preserved exactly.
 
 ## The `paint_color` format (reverse-engineered)
 
@@ -73,7 +80,7 @@ sample with zero loss.
 | `index.html`, `css/style.css` | UI |
 | `js/paint.js` | `paint_color` decode/encode codec |
 | `js/threemf.js` | unzip/parse `.3mf`, rewrite & repackage on export |
-| `js/cleanup.js` | adjacency, connected-component island removal, sliver cleanup |
+| `js/cleanup.js` | sub-triangle graph (T-junction-aware), connected-component island removal |
 | `js/viewer.js` | three.js rendering (per-face filament colors) |
 | `js/app.js` | wiring: load, preview/apply, stats, export |
 | `vendor/` | three.js r128, OrbitControls, JSZip (bundled for offline use) |
@@ -93,8 +100,10 @@ sub-edges agree, vs 75% for the wrong child order).
 
 ## Notes & limits
 
-- The island cleanup groups faces by their **dominant** color, so it operates at
-  whole-face granularity even though the display is per-sub-triangle. Use
-  *Boundary seam cleanup* for sub-triangle slivers.
+- Island size is measured in **sub-triangles**, which vary in size with
+  subdivision depth. If some stray patches survive, raise the threshold; if real
+  details disappear, lower it or untick that color. Preview before applying.
+- Building the sub-triangle graph takes ~1–2 s on a 200k-face model; it's cached
+  until the next edit.
 - Cleanup is color-based, not geometry-based, so it's safe to re-slice the
   result. Always sanity-check the export in your slicer.

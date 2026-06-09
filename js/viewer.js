@@ -136,11 +136,11 @@
         } else {
           Paint.tessellate(
             trees[i], ax, ay, az, bx, by, bz, cx, cy, cz,
-            (st, x0, y0, z0, x1, y1, z1, x2, y2, z2) => {
+            (leaf, x0, y0, z0, x1, y1, z1, x2, y2, z2) => {
               positions[off] = x0; positions[off + 1] = y0; positions[off + 2] = z0;
               positions[off + 3] = x1; positions[off + 4] = y1; positions[off + 5] = z1;
               positions[off + 6] = x2; positions[off + 7] = y2; positions[off + 8] = z2;
-              triState[t] = st;
+              triState[t] = leaf.state;
               off += 9; t += 1;
             }
           );

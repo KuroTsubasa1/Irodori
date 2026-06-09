@@ -154,8 +154,9 @@
   }
 
   /* Tessellate a face's paint tree into its leaf sub-triangles with exact
-   * Bambu/PrusaSlicer geometry, calling emit(state, ax,ay,az,bx,by,bz,cx,cy,cz)
-   * for each leaf. Corners (a,b,c) are the face's v1,v2,v3 positions.
+   * Bambu/PrusaSlicer geometry, calling emit(leafNode, ax,ay,az,bx,by,bz,cx,cy,cz)
+   * for each leaf (read leafNode.state for the color; the node reference lets
+   * callers rewrite the state in place). Corners (a,b,c) are v1,v2,v3 positions.
    *
    * Matches TriangleSelector::perform_split: rotate corners so corner[special]
    * is first, then split edges at midpoints. Children are assigned in REVERSE
@@ -163,7 +164,7 @@
    */
   function tessellate(node, ax, ay, az, bx, by, bz, cx, cy, cz, emit) {
     if (node.leaf) {
-      emit(node.state, ax, ay, az, bx, by, bz, cx, cy, cz);
+      emit(node, ax, ay, az, bx, by, bz, cx, cy, cz);
       return;
     }
     const sp = node.special;
