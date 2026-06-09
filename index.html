@@ -1,0 +1,94 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>3MF Color Fixer</title>
+    <link rel="stylesheet" href="css/style.css" />
+  </head>
+  <body>
+    <div id="app">
+      <aside id="sidebar">
+        <header class="brand">
+          <h1>3MF Color&nbsp;Fixer</h1>
+          <p class="sub">Remove stray-color islands from painted .3mf models</p>
+        </header>
+
+        <section class="card">
+          <label class="filebtn">
+            <input type="file" id="fileInput" accept=".3mf" />
+            <span>📂 Load .3mf file</span>
+          </label>
+          <div id="fileInfo" class="muted">No file loaded.</div>
+        </section>
+
+        <section class="card" id="filamentCard" hidden>
+          <h2>Filaments</h2>
+          <p class="hint">Tick the colors that are allowed to be removed when
+            they form small islands.</p>
+          <ul id="filamentList"></ul>
+        </section>
+
+        <section class="card" id="cleanCard" hidden>
+          <h2>Island cleanup</h2>
+          <label class="row">
+            <span>Max island size</span>
+            <input type="range" id="sizeRange" min="1" max="400" value="50" />
+            <output id="sizeOut">50</output>
+          </label>
+          <p class="hint">Connected single-color regions with this many faces or
+            fewer are recolored to the surrounding color.</p>
+          <div class="btnrow">
+            <button id="previewBtn" class="secondary">👁 Preview</button>
+            <button id="applyBtn" class="primary">✓ Apply</button>
+          </div>
+          <div id="previewInfo" class="muted"></div>
+        </section>
+
+        <section class="card" id="sliverCard" hidden>
+          <h2>Boundary seam cleanup <span class="adv">advanced</span></h2>
+          <p class="hint">In subdivided boundary faces, drop thin sub-triangles
+            of the ticked colors when they're a minority on that face.</p>
+          <ul id="sliverList"></ul>
+          <button id="sliverBtn" class="secondary">Clean seams</button>
+          <div id="sliverInfo" class="muted"></div>
+        </section>
+
+        <section class="card" id="statsCard" hidden>
+          <h2>Remaining small regions</h2>
+          <div id="statsBody" class="muted"></div>
+        </section>
+
+        <section class="card" id="actionCard" hidden>
+          <div class="btnrow">
+            <button id="resetBtn" class="ghost">↺ Reset to original</button>
+          </div>
+          <button id="exportBtn" class="primary wide">💾 Export corrected .3mf</button>
+        </section>
+
+        <footer class="foot muted">Runs entirely in your browser — nothing is uploaded.</footer>
+      </aside>
+
+      <main id="stage">
+        <div id="viewer"></div>
+        <div id="overlay" class="overlay">
+          <div class="drop-hint" id="dropHint">
+            <div class="big">Drop a <b>.3mf</b> file here</div>
+            <div>or use “Load .3mf file” on the left</div>
+          </div>
+        </div>
+        <div id="toast" class="toast" hidden></div>
+        <button id="reframeBtn" class="reframe" hidden title="Reset view">⤢</button>
+      </main>
+    </div>
+
+    <script src="vendor/three.min.js"></script>
+    <script src="vendor/OrbitControls.js"></script>
+    <script src="vendor/jszip.min.js"></script>
+    <script src="js/paint.js"></script>
+    <script src="js/threemf.js"></script>
+    <script src="js/cleanup.js"></script>
+    <script src="js/viewer.js"></script>
+    <script src="js/app.js"></script>
+  </body>
+</html>
