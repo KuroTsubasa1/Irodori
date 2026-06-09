@@ -144,6 +144,67 @@
     return { leaf: false, special: node.special, split: node.split, kids: kids };
   }
 
+  // Number of leaf sub-triangles in a face's tree.
+  function leafCount(node) {
+    if (node.leaf) return 1;
+    const kids = node.kids;
+    let n = 0;
+    for (let k = 0; k < kids.length; k++) n += leafCount(kids[k]);
+    return n;
+  }
+
+  /* Tessellate a face's paint tree into its leaf sub-triangles with exact
+   * Bambu/PrusaSlicer geometry, calling emit(state, ax,ay,az,bx,by,bz,cx,cy,cz)
+   * for each leaf. Corners (a,b,c) are the face's v1,v2,v3 positions.
+   *
+   * Matches TriangleSelector::perform_split: rotate corners so corner[special]
+   * is first, then split edges at midpoints. Children are assigned in REVERSE
+   * (deserialize consumes child_idx = total-1-k), so kids[k] -> child[split-k].
+   */
+  function tessellate(node, ax, ay, az, bx, by, bz, cx, cy, cz, emit) {
+    if (node.leaf) {
+      emit(node.state, ax, ay, az, bx, by, bz, cx, cy, cz);
+      return;
+    }
+    const sp = node.special;
+    const kids = node.kids;
+    const split = node.split;
+    // rotate corners: A = corner[sp], B = corner[sp+1], D = corner[sp+2]
+    const cs = [ax, ay, az, bx, by, bz, cx, cy, cz];
+    const A = sp * 3,
+      B = ((sp + 1) % 3) * 3,
+      D = ((sp + 2) % 3) * 3;
+    const Ax = cs[A], Ay = cs[A + 1], Az = cs[A + 2];
+    const Bx = cs[B], By = cs[B + 1], Bz = cs[B + 2];
+    const Dx = cs[D], Dy = cs[D + 1], Dz = cs[D + 2];
+
+    // child g receives kids[split - g]
+    const k = (g) => kids[split - g];
+
+    if (split === 1) {
+      // M = mid(B,D)
+      const mx = (Bx + Dx) / 2, my = (By + Dy) / 2, mz = (Bz + Dz) / 2;
+      tessellate(k(0), Ax, Ay, Az, Bx, By, Bz, mx, my, mz, emit); // (A,B,M)
+      tessellate(k(1), mx, my, mz, Dx, Dy, Dz, Ax, Ay, Az, emit); // (M,D,A)
+    } else if (split === 2) {
+      // M1 = mid(A,B), M2 = mid(A,D)
+      const m1x = (Ax + Bx) / 2, m1y = (Ay + By) / 2, m1z = (Az + Bz) / 2;
+      const m2x = (Ax + Dx) / 2, m2y = (Ay + Dy) / 2, m2z = (Az + Dz) / 2;
+      tessellate(k(0), Ax, Ay, Az, m1x, m1y, m1z, m2x, m2y, m2z, emit); // (A,M1,M2)
+      tessellate(k(1), m1x, m1y, m1z, Bx, By, Bz, m2x, m2y, m2z, emit); // (M1,B,M2)
+      tessellate(k(2), Bx, By, Bz, Dx, Dy, Dz, m2x, m2y, m2z, emit); //   (B,D,M2)
+    } else {
+      // split === 3: M1=mid(A,B), M2=mid(B,D), M3=mid(A,D)
+      const m1x = (Ax + Bx) / 2, m1y = (Ay + By) / 2, m1z = (Az + Bz) / 2;
+      const m2x = (Bx + Dx) / 2, m2y = (By + Dy) / 2, m2z = (Bz + Dz) / 2;
+      const m3x = (Ax + Dx) / 2, m3y = (Ay + Dy) / 2, m3z = (Az + Dz) / 2;
+      tessellate(k(0), Ax, Ay, Az, m1x, m1y, m1z, m3x, m3y, m3z, emit); //  (A,M1,M3)
+      tessellate(k(1), m1x, m1y, m1z, Bx, By, Bz, m2x, m2y, m2z, emit); //  (M1,B,M2)
+      tessellate(k(2), m2x, m2y, m2z, Dx, Dy, Dz, m3x, m3y, m3z, emit); //  (M2,D,M3)
+      tessellate(k(3), m1x, m1y, m1z, m2x, m2y, m2z, m3x, m3y, m3z, emit); // (M1,M2,M3)
+    }
+  }
+
   // If a split face now has all leaves of the same state, collapse to a solid
   // leaf (smaller, cleaner export).
   function collapseIfUniform(node) {
@@ -161,6 +222,8 @@
     solidState,
     dominantState,
     addLeafCounts,
+    leafCount,
+    tessellate,
     remapLeaves,
     collapseIfUniform,
   };

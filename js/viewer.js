@@ -1,33 +1,41 @@
-/* viewer.js — three.js rendering of the painted mesh, colored per filament. */
+/* viewer.js — three.js rendering of the painted mesh at full sub-triangle
+ * resolution (matches what the slicer shows: a face can be painted in pieces).
+ *
+ * Each face's paint tree is tessellated into leaf sub-triangles via
+ * Paint.tessellate. Geometry is rebuilt on structural changes; colors are a
+ * separate cheap pass so previews can highlight changed faces.
+ */
 (function (global) {
   "use strict";
 
-  let scene, camera, renderer, controls, root;
+  let scene, camera, renderer, controls, root, meshObj;
   let doc = null;
   let geom = null,
     colorAttr = null;
-  let faceIndex = []; // global face -> {mesh, local}
+
+  // per-build state
+  let triState = null; // Int32Array: state of each sub-triangle
+  let faceStart = null; // Int32Array(totalFaces+1): sub-tri range per global face
+  let meshFaceOffset = []; // global face offset per mesh
+  let totalSub = 0;
+
   const HIGHLIGHT = new THREE.Color("#ff00e6").convertSRGBToLinear();
 
   function init(container) {
     scene = new THREE.Scene();
     scene.background = new THREE.Color("#23272e");
-
     const w = container.clientWidth,
       h = container.clientHeight;
     camera = new THREE.PerspectiveCamera(45, w / h, 0.1, 5000);
     camera.position.set(60, 60, 120);
-
     renderer = new THREE.WebGLRenderer({ antialias: true });
     renderer.setPixelRatio(window.devicePixelRatio);
     renderer.setSize(w, h);
     renderer.outputEncoding = THREE.sRGBEncoding;
     container.appendChild(renderer.domElement);
-
     controls = new THREE.OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.08;
-
     scene.add(new THREE.HemisphereLight(0xffffff, 0x444455, 0.9));
     const d1 = new THREE.DirectionalLight(0xffffff, 0.7);
     d1.position.set(1, 1, 1);
@@ -35,10 +43,8 @@
     const d2 = new THREE.DirectionalLight(0xffffff, 0.4);
     d2.position.set(-1, 0.5, -1);
     scene.add(d2);
-
     root = new THREE.Group();
     scene.add(root);
-
     window.addEventListener("resize", () => onResize(container));
     animate();
   }
@@ -50,7 +56,6 @@
     camera.updateProjectionMatrix();
     renderer.setSize(w, h);
   }
-
   function animate() {
     requestAnimationFrame(animate);
     controls.update();
@@ -58,108 +63,134 @@
   }
 
   function colorForState(state) {
-    const fil = doc.filaments;
-    let idx = state;
-    if (state === 0) idx = doc.defaultExtruder; // unpainted -> object extruder
-    const f = fil[idx - 1] || fil[0];
+    let idx = state === 0 ? doc.defaultExtruder : state;
+    const f = doc.filaments[idx - 1] || doc.filaments[0];
     return f ? f.hex : "#cccccc";
   }
-
-  // Cache THREE.Color (linear) per state.
   let stateColorCache = {};
   function linColor(state) {
-    if (stateColorCache[state]) return stateColorCache[state];
-    const c = new THREE.Color(colorForState(state)).convertSRGBToLinear();
-    stateColorCache[state] = c;
+    let c = stateColorCache[state];
+    if (!c) {
+      c = new THREE.Color(colorForState(state)).convertSRGBToLinear();
+      stateColorCache[state] = c;
+    }
     return c;
   }
 
-  function load(d) {
+  // (Re)build the sub-triangle geometry from each mesh's current paints.
+  function build(d) {
     doc = d;
     stateColorCache = {};
-    if (root) {
-      root.clear();
-      if (geom) geom.dispose();
-    }
-    faceIndex = [];
 
-    // total faces & verts
+    // count total faces and sub-triangles; cache per-face solid/tree
     let totalFaces = 0;
+    meshFaceOffset = [];
+    const meshTrees = []; // per mesh: { solid:Int32Array(-1|state), tree:Array }
+    totalSub = 0;
     for (const m of doc.meshes) {
-      Cleanup.computeDominant(m);
+      meshFaceOffset.push(totalFaces);
       totalFaces += m.nf;
+      const solid = new Int32Array(m.nf);
+      const trees = new Array(m.nf);
+      for (let i = 0; i < m.nf; i++) {
+        const s = Paint.solidState(m.paints[i]);
+        if (s >= 0) {
+          solid[i] = s;
+          trees[i] = null;
+          totalSub += 1;
+        } else {
+          solid[i] = -1;
+          const t = Paint.decode(m.paints[i]);
+          trees[i] = t;
+          totalSub += Paint.leafCount(t);
+        }
+      }
+      meshTrees.push({ solid, trees });
     }
 
-    const positions = new Float32Array(totalFaces * 9);
-    const colors = new Float32Array(totalFaces * 9);
-    let fo = 0; // running global face offset
+    const positions = new Float32Array(totalSub * 9);
+    triState = new Int32Array(totalSub);
+    faceStart = new Int32Array(totalFaces + 1);
 
-    for (const m of doc.meshes) {
+    let off = 0; // float offset into positions
+    let t = 0; // sub-tri index
+    let gf = 0; // global face index
+    for (let mi = 0; mi < doc.meshes.length; mi++) {
+      const m = doc.meshes[mi];
       const P = m.positions;
+      const { solid, trees } = meshTrees[mi];
       for (let i = 0; i < m.nf; i++) {
+        faceStart[gf] = t;
         const a = m.v1[i] * 3,
           b = m.v2[i] * 3,
           c = m.v3[i] * 3;
-        const o = (fo + i) * 9;
-        positions[o] = P[a];
-        positions[o + 1] = P[a + 1];
-        positions[o + 2] = P[a + 2];
-        positions[o + 3] = P[b];
-        positions[o + 4] = P[b + 1];
-        positions[o + 5] = P[b + 2];
-        positions[o + 6] = P[c];
-        positions[o + 7] = P[c + 1];
-        positions[o + 8] = P[c + 2];
-        faceIndex.push(m, i);
+        const ax = P[a], ay = P[a + 1], az = P[a + 2];
+        const bx = P[b], by = P[b + 1], bz = P[b + 2];
+        const cx = P[c], cy = P[c + 1], cz = P[c + 2];
+        if (solid[i] >= 0) {
+          positions[off] = ax; positions[off + 1] = ay; positions[off + 2] = az;
+          positions[off + 3] = bx; positions[off + 4] = by; positions[off + 5] = bz;
+          positions[off + 6] = cx; positions[off + 7] = cy; positions[off + 8] = cz;
+          triState[t] = solid[i];
+          off += 9; t += 1;
+        } else {
+          Paint.tessellate(
+            trees[i], ax, ay, az, bx, by, bz, cx, cy, cz,
+            (st, x0, y0, z0, x1, y1, z1, x2, y2, z2) => {
+              positions[off] = x0; positions[off + 1] = y0; positions[off + 2] = z0;
+              positions[off + 3] = x1; positions[off + 4] = y1; positions[off + 5] = z1;
+              positions[off + 6] = x2; positions[off + 7] = y2; positions[off + 8] = z2;
+              triState[t] = st;
+              off += 9; t += 1;
+            }
+          );
+        }
+        gf += 1;
       }
-      m._faceOffset = fo;
-      fo += m.nf;
     }
+    faceStart[totalFaces] = t;
 
+    if (geom) {
+      root.remove(meshObj);
+      geom.dispose();
+    }
     geom = new THREE.BufferGeometry();
     geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    colorAttr = new THREE.BufferAttribute(colors, 3);
+    colorAttr = new THREE.BufferAttribute(new Float32Array(totalSub * 9), 3);
     geom.setAttribute("color", colorAttr);
     geom.computeVertexNormals();
-    geom.computeBoundingBox();
     geom.computeBoundingSphere();
-
     const mat = new THREE.MeshStandardMaterial({
       vertexColors: true,
       roughness: 0.75,
       metalness: 0.0,
-      flatShading: true,
     });
-    const mesh = new THREE.Mesh(geom, mat);
-    root.add(mesh);
+    meshObj = new THREE.Mesh(geom, mat);
+    root.add(meshObj);
 
-    refreshColors();
-    frame();
+    setHighlight(null);
   }
 
-  // Write the current per-face dominant colors into the color attribute.
-  function refreshColors(highlightSet) {
+  // Recolor sub-triangles; faces in highlightSet (global indices) flash pink.
+  function setHighlight(highlightSet) {
+    if (!colorAttr) return;
     const colors = colorAttr.array;
-    for (let i = 0; i < doc.meshes.length; i++) {
-      const m = doc.meshes[i];
-      const off = m._faceOffset;
-      const dom = m.dom;
-      for (let f = 0; f < m.nf; f++) {
-        let col;
-        if (highlightSet && highlightSet.has(off + f)) col = HIGHLIGHT;
-        else col = linColor(dom[f]);
-        const o = (off + f) * 9;
-        for (let k = 0; k < 9; k += 3) {
-          colors[o + k] = col.r;
-          colors[o + k + 1] = col.g;
-          colors[o + k + 2] = col.b;
-        }
+    const nFaces = faceStart.length - 1;
+    for (let g = 0; g < nFaces; g++) {
+      const hi = highlightSet && highlightSet.has(g);
+      for (let st = faceStart[g]; st < faceStart[g + 1]; st++) {
+        const col = hi ? HIGHLIGHT : linColor(triState[st]);
+        const o = st * 9;
+        colors[o] = col.r; colors[o + 1] = col.g; colors[o + 2] = col.b;
+        colors[o + 3] = col.r; colors[o + 4] = col.g; colors[o + 5] = col.b;
+        colors[o + 6] = col.r; colors[o + 7] = col.g; colors[o + 8] = col.b;
       }
     }
     colorAttr.needsUpdate = true;
   }
 
   function frame() {
+    if (!geom) return;
     const bs = geom.boundingSphere;
     const c = bs.center,
       r = bs.radius || 50;
@@ -172,17 +203,11 @@
     controls.update();
   }
 
-  function setBackground(hex) {
-    scene.background = new THREE.Color(hex);
-  }
-
   global.Viewer = {
     init,
-    load,
-    refreshColors,
+    build,
+    setHighlight,
     frame,
-    setBackground,
-    // expose global-face -> mesh/local for the UI if needed
-    faceCount: () => faceIndex.length / 2,
+    subTriangleCount: () => totalSub,
   };
 })(window);

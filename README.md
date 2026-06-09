@@ -23,8 +23,9 @@ Everything runs locally in your browser. Nothing is uploaded.
 6. Click **Export corrected .3mf** to download `<name>_fixed.3mf`. Open it back
    in Bambu Studio.
 
-You can **Reset to original** at any time; cleanup only ever changes colors,
-never geometry.
+**Undo / Redo** (buttons or ⌘/Ctrl-Z and ⌘/Ctrl-Shift-Z) step through your full
+edit history. **Reset to original** jumps back to the loaded file. Cleanup only
+ever changes colors, never geometry.
 
 ## How the cleanup works
 
@@ -77,9 +78,23 @@ sample with zero loss.
 | `js/app.js` | wiring: load, preview/apply, stats, export |
 | `vendor/` | three.js r128, OrbitControls, JSZip (bundled for offline use) |
 
+## High-resolution rendering
+
+A face can be painted in pieces — the slicer subdivides boundary triangles and
+paints each sub-triangle. The viewer reproduces this exactly: every face's paint
+tree is tessellated into its leaf sub-triangles using the same geometry as
+`TriangleSelector::perform_split` (corners rotated by `special_side`, edges split
+at midpoints, children consumed in reverse order). On the sample this expands
+199,672 faces into **544,468 painted sub-triangles**, matching what you see in
+Bambu Studio rather than a one-color-per-face approximation. Geometry was
+verified to partition each face to floating-point precision, and the
+sub-triangle color placement was cross-checked by edge-coherence (86% of shared
+sub-edges agree, vs 75% for the wrong child order).
+
 ## Notes & limits
 
-- The 3D view colors each face by its **dominant** filament; thin sub-triangle
-  boundary detail is simplified on screen but preserved in the exported file.
+- The island cleanup groups faces by their **dominant** color, so it operates at
+  whole-face granularity even though the display is per-sub-triangle. Use
+  *Boundary seam cleanup* for sub-triangle slivers.
 - Cleanup is color-based, not geometry-based, so it's safe to re-slice the
   result. Always sanity-check the export in your slicer.

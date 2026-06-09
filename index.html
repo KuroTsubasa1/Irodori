@@ -61,6 +61,11 @@
 
         <section class="card" id="actionCard" hidden>
           <div class="btnrow">
+            <button id="undoBtn" class="ghost" disabled>↶ Undo</button>
+            <button id="redoBtn" class="ghost" disabled>↷ Redo</button>
+          </div>
+          <div id="histInfo" class="muted"></div>
+          <div class="btnrow" style="margin-top:8px">
             <button id="resetBtn" class="ghost">↺ Reset to original</button>
           </div>
           <button id="exportBtn" class="primary wide">💾 Export corrected .3mf</button>
