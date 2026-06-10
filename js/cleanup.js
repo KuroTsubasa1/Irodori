@@ -456,6 +456,152 @@
     return { count: members.length, changedFaces, from: seedState, to: target };
   }
 
+  // Squared distance from point p to triangle (a,b,c) — Ericson's closest-point
+  // construction, all inputs flat scalars.
+  function dist2PointTri(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz) {
+    const abx = bx - ax, aby = by - ay, abz = bz - az;
+    const acx = cx - ax, acy = cy - ay, acz = cz - az;
+    const apx = px - ax, apy = py - ay, apz = pz - az;
+    const d1 = abx * apx + aby * apy + abz * apz;
+    const d2 = acx * apx + acy * apy + acz * apz;
+    if (d1 <= 0 && d2 <= 0) return apx * apx + apy * apy + apz * apz;
+    const bpx = px - bx, bpy = py - by, bpz = pz - bz;
+    const d3 = abx * bpx + aby * bpy + abz * bpz;
+    const d4 = acx * bpx + acy * bpy + acz * bpz;
+    if (d3 >= 0 && d4 <= d3) return bpx * bpx + bpy * bpy + bpz * bpz;
+    const vc = d1 * d4 - d3 * d2;
+    if (vc <= 0 && d1 >= 0 && d3 <= 0) {
+      const v = d1 / (d1 - d3);
+      const qx = ax + abx * v - px, qy = ay + aby * v - py, qz = az + abz * v - pz;
+      return qx * qx + qy * qy + qz * qz;
+    }
+    const cpx = px - cx, cpy = py - cy, cpz = pz - cz;
+    const d5 = abx * cpx + aby * cpy + abz * cpz;
+    const d6 = acx * cpx + acy * cpy + acz * cpz;
+    if (d6 >= 0 && d5 <= d6) return cpx * cpx + cpy * cpy + cpz * cpz;
+    const vb = d5 * d2 - d1 * d6;
+    if (vb <= 0 && d2 >= 0 && d6 <= 0) {
+      const w = d2 / (d2 - d6);
+      const qx = ax + acx * w - px, qy = ay + acy * w - py, qz = az + acz * w - pz;
+      return qx * qx + qy * qy + qz * qz;
+    }
+    const va = d3 * d6 - d5 * d4;
+    if (va <= 0 && d4 - d3 >= 0 && d5 - d6 >= 0) {
+      const w = (d4 - d3) / (d4 - d3 + (d5 - d6));
+      const qx = bx + (cx - bx) * w - px, qy = by + (cy - by) * w - py, qz = bz + (cz - bz) * w - pz;
+      return qx * qx + qy * qy + qz * qz;
+    }
+    const denom = 1 / (va + vb + vc), v = vb * denom, w = vc * denom;
+    const qx = ax + abx * v + acx * w - px, qy = ay + aby * v + acy * w - py, qz = az + abz * v + acz * w - pz;
+    return qx * qx + qy * qy + qz * qz;
+  }
+
+  /* Slicer-style stamp painting: paint leaves fully inside the stamp union and
+   * SUBDIVIDE leaves crossing the stamp edge (4-way splits, depth-capped), so
+   * stroke edges follow the brush instead of whole leaves. Child geometry uses
+   * Paint.tessellate's exact conventions (corner rotation by `special`,
+   * midpoints, reversed kid order). Trees are re-collapsed and re-encoded.
+   * stamps: [{x,y,z,r}]. Returns { count, changedFaces }. */
+  function paintStamps(mesh, stamps, state, opts) {
+    const maxDepth = (opts && opts.maxDepth) || 4;
+    const P = mesh.positions;
+    const covered = (x, y, z) => {
+      for (const s of stamps) {
+        const dx = x - s.x, dy = y - s.y, dz = z - s.z;
+        if (dx * dx + dy * dy + dz * dz <= s.r * s.r) return true;
+      }
+      return false;
+    };
+    const overlaps = (ax, ay, az, bx, by, bz, cx, cy, cz) => {
+      for (const s of stamps) {
+        if (dist2PointTri(s.x, s.y, s.z, ax, ay, az, bx, by, bz, cx, cy, cz) <= s.r * s.r) return true;
+      }
+      return false;
+    };
+    // broad phase: stamp union AABB vs face AABB
+    let sx0 = Infinity, sy0 = Infinity, sz0 = Infinity, sx1 = -Infinity, sy1 = -Infinity, sz1 = -Infinity;
+    for (const s of stamps) {
+      sx0 = Math.min(sx0, s.x - s.r); sy0 = Math.min(sy0, s.y - s.r); sz0 = Math.min(sz0, s.z - s.r);
+      sx1 = Math.max(sx1, s.x + s.r); sy1 = Math.max(sy1, s.y + s.r); sz1 = Math.max(sz1, s.z + s.r);
+    }
+
+    let count = 0;
+    const changedFaces = new Set();
+    let faceChanged = false;
+
+    function walk(node, depth, ax, ay, az, bx, by, bz, cx, cy, cz) {
+      if (node.leaf) {
+        if (!overlaps(ax, ay, az, bx, by, bz, cx, cy, cz)) return;
+        const mx = (ax + bx + cx) / 3, my = (ay + by + cy) / 3, mz = (az + bz + cz) / 3;
+        const full = covered(ax, ay, az) && covered(bx, by, bz) && covered(cx, cy, cz) && covered(mx, my, mz);
+        if (full) {
+          if (node.state !== state) { node.state = state; count++; faceChanged = true; }
+          return;
+        }
+        if (depth >= maxDepth) {
+          if (covered(mx, my, mz) && node.state !== state) { node.state = state; count++; faceChanged = true; }
+          return;
+        }
+        // partial overlap: split this leaf in place (children inherit its state)
+        const st = node.state;
+        node.leaf = false; node.split = 3; node.special = 0;
+        node.kids = [
+          { leaf: true, state: st }, { leaf: true, state: st },
+          { leaf: true, state: st }, { leaf: true, state: st },
+        ];
+        faceChanged = true;
+        // fall through into the split handling below
+      }
+      const sp = node.special, split = node.split, kids = node.kids;
+      const cs = [ax, ay, az, bx, by, bz, cx, cy, cz];
+      const A = sp * 3, B = ((sp + 1) % 3) * 3, D = ((sp + 2) % 3) * 3;
+      const Ax = cs[A], Ay = cs[A + 1], Az = cs[A + 2];
+      const Bx = cs[B], By = cs[B + 1], Bz = cs[B + 2];
+      const Dx = cs[D], Dy = cs[D + 1], Dz = cs[D + 2];
+      const k = (g) => kids[split - g]; // tessellate's reversed kid mapping
+      if (split === 1) {
+        const mx = (Bx + Dx) / 2, my = (By + Dy) / 2, mz = (Bz + Dz) / 2;
+        walk(k(0), depth + 1, Ax, Ay, Az, Bx, By, Bz, mx, my, mz);
+        walk(k(1), depth + 1, mx, my, mz, Dx, Dy, Dz, Ax, Ay, Az);
+      } else if (split === 2) {
+        const m1x = (Ax + Bx) / 2, m1y = (Ay + By) / 2, m1z = (Az + Bz) / 2;
+        const m2x = (Ax + Dx) / 2, m2y = (Ay + Dy) / 2, m2z = (Az + Dz) / 2;
+        walk(k(0), depth + 1, Ax, Ay, Az, m1x, m1y, m1z, m2x, m2y, m2z);
+        walk(k(1), depth + 1, m1x, m1y, m1z, Bx, By, Bz, m2x, m2y, m2z);
+        walk(k(2), depth + 1, Bx, By, Bz, Dx, Dy, Dz, m2x, m2y, m2z);
+      } else {
+        const m1x = (Ax + Bx) / 2, m1y = (Ay + By) / 2, m1z = (Az + Bz) / 2;
+        const m2x = (Bx + Dx) / 2, m2y = (By + Dy) / 2, m2z = (Bz + Dz) / 2;
+        const m3x = (Ax + Dx) / 2, m3y = (Ay + Dy) / 2, m3z = (Az + Dz) / 2;
+        walk(k(0), depth + 1, Ax, Ay, Az, m1x, m1y, m1z, m3x, m3y, m3z);
+        walk(k(1), depth + 1, m1x, m1y, m1z, Bx, By, Bz, m2x, m2y, m2z);
+        walk(k(2), depth + 1, m2x, m2y, m2z, Dx, Dy, Dz, m3x, m3y, m3z);
+        walk(k(3), depth + 1, m1x, m1y, m1z, m2x, m2y, m2z, m3x, m3y, m3z);
+      }
+    }
+
+    for (let f = 0; f < mesh.nf; f++) {
+      const a = mesh.v1[f] * 3, b = mesh.v2[f] * 3, c = mesh.v3[f] * 3;
+      const x0 = P[a], y0 = P[a + 1], z0 = P[a + 2];
+      const x1 = P[b], y1 = P[b + 1], z1 = P[b + 2];
+      const x2 = P[c], y2 = P[c + 1], z2 = P[c + 2];
+      if (Math.max(x0, x1, x2) < sx0 || Math.min(x0, x1, x2) > sx1 ||
+          Math.max(y0, y1, y2) < sy0 || Math.min(y0, y1, y2) > sy1 ||
+          Math.max(z0, z1, z2) < sz0 || Math.min(z0, z1, z2) > sz1) continue;
+      const tree = Paint.decode(mesh.paints[f]);
+      faceChanged = false;
+      walk(tree, 0, x0, y0, z0, x1, y1, z1, x2, y2, z2);
+      if (faceChanged) {
+        const col = Paint.collapseDeep(tree);
+        mesh.paints[f] = Paint.encode(col);
+        if (mesh.dom) mesh.dom[f] = Paint.dominantState(col);
+        changedFaces.add(f);
+      }
+    }
+    if (changedFaces.size) invalidateSub(mesh);
+    return { count, changedFaces };
+  }
+
   /* Per-state sorted component sizes (sub-triangles), cached. Used by stats. */
   function subSizes(mesh) {
     if (mesh._subSizes) return mesh._subSizes;
@@ -561,5 +707,6 @@
     invalidateSub,
     selectColorRegion,
     mirrorMap,
+    paintStamps,
   };
 })(window);

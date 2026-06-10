@@ -121,4 +121,16 @@ function makeOpenTube() {
   };
 }
 
-module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube };
+// One large unpainted face (state 0) for stamp-refinement tests.
+function makeBigTriangle() {
+  return {
+    nf: 1,
+    positions: new Float32Array([0, 0, 0, 8, 0, 0, 0, 8, 0]),
+    v1: Int32Array.from([0]),
+    v2: Int32Array.from([1]),
+    v3: Int32Array.from([2]),
+    paints: [""],
+  };
+}
+
+module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeBigTriangle };

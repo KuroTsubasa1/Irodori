@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { loadModules, makeTetra, makeMirrorPair } = require("./harness");
+const { loadModules, makeTetra, makeMirrorPair, makeBigTriangle } = require("./harness");
 
 test("harness loads modules and Paint decodes", () => {
   const { Paint, Cleanup } = loadModules();
@@ -78,4 +78,34 @@ test("collapseDeep merges uniform subtrees and keeps mixed ones", () => {
   const mixed = { leaf: false, split: 1, special: 0, kids: [leaf(1), leaf(2)] };
   const kept = Paint.collapseDeep(mixed);
   assert.ok(!kept.leaf, "mixed tree stays split");
+});
+
+test("paintStamps subdivides a face at the stroke edge", () => {
+  const { Cleanup, Paint } = loadModules();
+  const mesh = makeBigTriangle();
+  const res = Cleanup.paintStamps(mesh, [{ x: 2, y: 2, z: 0, r: 0.9 }], 1, { maxDepth: 4 });
+  assert.ok(res.count > 0, "some leaves painted");
+  const tree = Paint.decode(mesh.paints[0]);
+  const n = Paint.leafCount(tree);
+  assert.ok(n > 1, "face was subdivided (leafCount " + n + ")");
+  assert.ok(n <= Math.pow(4, 4), "depth bound respected");
+  const counts = {};
+  Paint.addLeafCounts(tree, counts);
+  assert.ok((counts[1] || 0) > 0, "painted leaves present");
+  assert.ok((counts[0] || 0) > 0, "unpainted leaves remain outside the stamp");
+});
+
+test("paintStamps collapses a fully covered face to a solid leaf", () => {
+  const { Cleanup, Paint } = loadModules();
+  const mesh = makeBigTriangle();
+  Cleanup.paintStamps(mesh, [{ x: 2.5, y: 2.5, z: 0, r: 50 }], 1, { maxDepth: 4 });
+  assert.equal(Paint.solidState(mesh.paints[0]), 1, "single solid state-1 leaf (collapsed)");
+});
+
+test("paintStamps leaves untouched faces alone", () => {
+  const { Cleanup } = loadModules();
+  const mesh = makeBigTriangle();
+  const res = Cleanup.paintStamps(mesh, [{ x: 50, y: 50, z: 50, r: 1 }], 1, { maxDepth: 4 });
+  assert.equal(res.count, 0);
+  assert.equal(mesh.paints[0], "", "paint string unchanged");
 });
