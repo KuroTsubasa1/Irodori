@@ -164,3 +164,29 @@ test("stacked end-loops are capped independently (not as outer+hole)", () => {
     assert.equal(capBoundaryEdges(cap.tris).size, 8, method + ": both rims capped exactly once");
   }
 });
+
+test("coplanar asymmetric hole caps weld to the right vertices (area check)", () => {
+  const { Caps } = loadModules();
+  // outer 6x6 square (CCW), hole an asymmetric quad listed CW (forces the
+  // CCW-normalization reversal). Correct triangulation covers exactly
+  // outer minus hole; a reflected vid assignment folds triangles and the
+  // absolute-area sum diverges.
+  const coords = {
+    0: [0, 0, 0], 1: [6, 0, 0], 2: [6, 6, 0], 3: [0, 6, 0],
+    // hole CCW order would be (1,1),(4,1.5),(3.5,3),(1.5,4) -> listed reversed (CW):
+    4: [1.5, 4, 0], 5: [3.5, 3, 0], 6: [4, 1.5, 0], 7: [1, 1, 0],
+  };
+  const holeArea = 5.625, outerArea = 36, expected = outerArea - holeArea;
+  for (const method of ["earcut", "cdt"]) {
+    const cap = Caps.triangulateLoops([[0, 1, 2, 3], [4, 5, 6, 7]], (v) => coords[v], method);
+    assert.equal(cap.extraPts.length, 0, method + ": no fallback");
+    let sum = 0;
+    for (const t of cap.tris) {
+      const p = t.map((r) => coords[cap.verts[r]]);
+      const ux = p[1][0] - p[0][0], uy = p[1][1] - p[0][1];
+      const vx = p[2][0] - p[0][0], vy = p[2][1] - p[0][1];
+      sum += Math.abs(ux * vy - uy * vx) / 2;
+    }
+    assert.ok(Math.abs(sum - expected) < 1e-6, method + ": cap area " + sum.toFixed(4) + " == outer-hole " + expected);
+  }
+});

@@ -408,7 +408,7 @@
       // proportional exploded view: every pair of parts separates by ×(1+K),
       // so adjacent parts get a real gap instead of staying glued together
       const target = new THREE.Vector3().subVectors(pc, c).multiplyScalar(EXPLODE_K);
-      if (target.lengthSq() < 1e-9) target.set(0, 0, r * 0.15);
+      if (target.lengthSq() < 1e-9) target.set(0, 0, r * 0.15); // part centered at the model center (rare): nudge along +Z
       root.add(mesh);
       const cur = prevById.get(p.id) || new THREE.Vector3();
       mesh.position.copy(cur);

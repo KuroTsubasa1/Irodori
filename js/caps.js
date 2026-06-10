@@ -128,7 +128,8 @@
 
   // Triangulate boundary loops with one of: centroid | projected | earcut | cdt.
   // loops: array of vid-arrays. getPt(vid) -> [x,y,z]. Returns the cap descriptor
-  // { verts, extraPts, tris } (see file header). earcut/cdt are added in Task 5.
+  // { verts, extraPts, tris } (see file header). earcut and cdt project
+  // per-loop and support outer+hole nesting for coplanar loops.
   function triangulateLoops(loops, getPt, method) {
     const verts = [];
     const vIndex = new Map();
@@ -178,11 +179,14 @@
     // opposite-winding rims cancel Newell's normal), own-plane CCW projection, area,
     // and 3-D centroid (for classification in another loop's frame)
     const L = loops.map((loop) => {
-      const pts3 = loop.map(getPt);
+      let pts3 = loop.map(getPt);
       const lpl = bestFitPlane(pts3);
       let poly2 = pts3.map((p) => project(lpl, p));
       let vids = loop.slice();
-      if (signedArea2(poly2) < 0) { poly2 = poly2.slice().reverse(); vids = vids.slice().reverse(); }
+      // Own-frame projections are CCW by construction (Newell orients the loop
+      // CCW around its own normal); this branch is a numerical safety net for
+      // near-degenerate loops. pts3/poly2/vids must stay index-aligned.
+      if (signedArea2(poly2) < 0) { pts3 = pts3.slice().reverse(); poly2 = poly2.slice().reverse(); vids = vids.slice().reverse(); }
       const c3 = [0, 0, 0];
       for (const p of pts3) { c3[0] += p[0]; c3[1] += p[1]; c3[2] += p[2]; }
       c3[0] /= pts3.length; c3[1] /= pts3.length; c3[2] /= pts3.length;
