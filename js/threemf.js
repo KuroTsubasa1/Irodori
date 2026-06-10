@@ -98,13 +98,14 @@
       if (em) defaultExtruder = +em[1];
     }
 
-    // every .model file that contains a mesh
+    // every .model file: collect ALL its meshes; keep raw text for round-trip
     const modelFiles = zip.file(/\.model$/i);
     const meshes = [];
+    const files = {};
     for (const mf of modelFiles) {
       const txt = await mf.async("string");
-      const mesh = parseMeshFromModel(txt, mf.name);
-      if (mesh && mesh.nf > 0) meshes.push(mesh);
+      files[mf.name] = txt;
+      for (const mesh of parseMeshes(txt, mf.name)) if (mesh.nf > 0) meshes.push(mesh);
     }
 
     if (!filaments.length) {
@@ -113,7 +114,7 @@
       filaments = fallback.map((h, i) => ({ index: i + 1, hex: h }));
     }
 
-    return { zip, filaments, defaultExtruder, meshes, origFilamentCount: filaments.length };
+    return { zip, filaments, defaultExtruder, meshes, files, origFilamentCount: filaments.length };
   }
 
   // Compact float formatting (trims trailing zeros, keeps printing precision).
@@ -179,27 +180,11 @@
   // positions/paints (so rotation and color edits are both written) and
   // generate a new .3mf Blob.
   async function exportZip(doc) {
-    for (const mesh of doc.meshes) {
-      const P = mesh.positions;
-      const vlines = new Array(mesh.nv);
-      for (let i = 0; i < mesh.nv; i++) {
-        const o = i * 3;
-        vlines[i] =
-          '     <vertex x="' + fnum(P[o]) + '" y="' + fnum(P[o + 1]) +
-          '" z="' + fnum(P[o + 2]) + '"/>';
-      }
-      const tlines = new Array(mesh.nf);
-      for (let i = 0; i < mesh.nf; i++) {
-        const p = mesh.paints[i];
-        const base =
-          '     <triangle v1="' + mesh.v1[i] + '" v2="' + mesh.v2[i] +
-          '" v3="' + mesh.v3[i] + '"';
-        tlines[i] = p ? base + ' paint_color="' + p + '"/>' : base + "/>";
-      }
-      const vBlock = "\n" + vlines.join("\n") + "\n    ";
-      const tBlock = "\n" + tlines.join("\n") + "\n    ";
-      const newText = mesh._pre + vBlock + mesh._mid + tBlock + mesh._tail;
-      doc.zip.file(mesh.path, newText);
+    const byPath = new Map();
+    for (const mesh of doc.meshes) { let a = byPath.get(mesh.path); if (!a) byPath.set(mesh.path, a = []); a.push(mesh); }
+    for (const [path, fileMeshes] of byPath) {
+      const base = (doc.files && doc.files[path]) || null;
+      if (base != null) doc.zip.file(path, rebuildModelFile(base, fileMeshes));
     }
     if (doc.filaments.length > (doc.origFilamentCount ?? 0)) {
       const arr = doc.zip.file(/project_settings\.config$/i);
