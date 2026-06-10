@@ -122,8 +122,8 @@
     }
     modelSize = Math.hypot(d - a, e - b, f - c) || 100;
   }
-  const brushRadius = () => (+$("brushSize").value / 100) * modelSize * 0.15 + modelSize * 0.004;
-  const ringHalf = () => (+$("ringThick").value / 100) * modelSize * 0.05 + modelSize * 0.002;
+  const brushRadius = () => { const t = (+$("brushSize").value) / 100; return modelSize * (0.0015 + 0.06 * t * t); };
+  const ringHalf = () => { const t = (+$("ringThick").value) / 100; return modelSize * (0.001 + 0.04 * t * t); };
 
   // ---------- loading ----------
   async function loadFile(file) {
@@ -199,7 +199,7 @@
     paintState = s;
     document.querySelectorAll(".pal").forEach((p) => p.classList.toggle("sel", +p.dataset.state === s));
   }
-  const sizeDotPx = (v) => Math.round(6 + (v / 100) * 34);
+  const sizeDotPx = (v) => { const t = v / 100; return Math.round(5 + t * t * 33); };
   function updateSizeDots() {
     const b = sizeDotPx(+$("brushSize").value);
     $("brushPrev").style.width = $("brushPrev").style.height = b + "px";
