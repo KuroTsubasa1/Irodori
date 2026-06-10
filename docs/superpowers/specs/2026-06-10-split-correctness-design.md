@@ -40,21 +40,25 @@ Touches `js/caps.js`, `js/split.js`, `js/viewer.js`, `js/cleanup.js`,
 
 ### 1. Coplanarity-gated hole classification (`js/caps.js`)
 
-In `triangulateLoops`'s earcut/cdt block, each per-loop record gains
-`d` = the loop's mean offset along the shared plane normal:
-`d = mean over the loop's points of n·(p − origin)` (computed from the 3-D
-points, not the projection). The grouping rule becomes:
+**(As implemented, slightly stronger than first drafted.)** Implementation
+surfaced a second defect: the shared plane was computed by Newell over the
+*concatenation* of all loops — a tube's two rims have opposite winding, so
+their Newell terms cancel (degenerate plane; for the real ear band, partial
+cancellation produced the ill-conditioned plane behind the annulus). The
+shipped fix removes the shared plane entirely:
 
-```
-hole(hi of outer oi) ⇔ inPoly(L[hi].centroid2, L[oi].poly2)
-                        AND |L[hi].d − L[oi].d| ≤ COPLANAR_FRAC · sqrt(L[oi].area)
-```
+- each loop gets its **own** `bestFitPlane`, own-plane CCW projection, area,
+  and 3-D centroid `c3`;
+- a loop `H` is a hole of outer `O` ⇔ `project(O.pl, H.c3)` lies inside
+  `O.poly2` **and** `|n_O · (H.c3 − O.origin)| ≤ COPLANAR_FRAC · sqrt(O.area)`
+  with `COPLANAR_FRAC = 0.25`;
+- each group is emitted projected onto its **outer's** plane (holes
+  re-projected into that frame; earcut/poly2tri normalize hole winding
+  internally).
 
-with `COPLANAR_FRAC = 0.25`. Genuine flat caps with island holes have
-`|Δd| ≈ 0` and keep working; stacked end-rings (|Δd| ≈ band height ≫
-0.25·ring size) become **independent outers**, each capped separately.
-Both earcut and cdt share this classifier. Loops that fail the coplanarity
-test simply continue through the existing "independent outer" path.
+Genuine flat caps with island holes (offset ≈ 0) keep working; stacked
+end-rings become independent outers, each earcut in its own well-conditioned
+plane. Both earcut and cdt share this classifier.
 
 ### 2. Live fill color = majority bordering color (`js/split.js`, `js/viewer.js`)
 

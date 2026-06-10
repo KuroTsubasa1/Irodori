@@ -155,7 +155,16 @@ test("solidFromSubs caps an open tube with two independent end caps", () => {
 ```
 
 - [ ] **Step 3: Run** — `node --test`
-Expected: **32 pass / 0 fail** (this passes thanks to Task 1; it pins the behavior at the `solidFromSubs` level — the exact shape of the user's ear-band bug).
+Expected: **32 pass / 0 fail**.
+
+> **Outcome note (what actually shipped):** this test exposed a second root
+> cause — the shared plane was Newell over the *concatenation* of all loops,
+> which cancels for a tube's opposite-winding rims (degenerate plane → both
+> rims fell to centroid fans). Task 2's commit therefore reworked the
+> classifier to **per-loop planes**: classification happens in the candidate
+> outer's own frame (centroid projected into it + normal-offset gate), and
+> each group is emitted projected onto its outer's plane. See the updated
+> spec §1; commit `6b9f6bb`.
 
 - [ ] **Step 4: Commit**
 
