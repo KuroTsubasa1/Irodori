@@ -415,6 +415,7 @@
   }
   function doReset() {
     if (!doc) return;
+    clearSplitPreview();
     restore(history[0].state);
     previewActive = false;
     pushHistory("Reset to original");
@@ -424,6 +425,7 @@
   }
   function jumpTo(idx) {
     if (!doc || idx < 0 || idx >= history.length) return;
+    clearSplitPreview();
     previewActive = false; histIndex = idx;
     restore(current()); render(null); updateStats(); updateHist();
     $("previewInfo").textContent = "";

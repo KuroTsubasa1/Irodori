@@ -45,7 +45,7 @@
 
   const HIGHLIGHT = new THREE.Color("#1fe3ff").convertSRGBToLinear();
   let previewSubs = null; // global sub indices tinted for the split hover preview
-  const PREVIEW = new THREE.Color("#1fe3ff").convertSRGBToLinear();
+  const PREVIEW = HIGHLIGHT; // split hover preview reuses the auto-clean highlight cyan
 
   function init(container) {
     scene = new THREE.Scene();
@@ -139,6 +139,12 @@
           controls.mouseButtons.LEFT = null;
           renderer.domElement.style.cursor = "crosshair";
         }
+      }
+    });
+    window.addEventListener("blur", () => {
+      if (altOrbit) {
+        altOrbit = false;
+        if (toolMode === "paint") { controls.mouseButtons.LEFT = null; renderer.domElement.style.cursor = "crosshair"; }
       }
     });
     animate();
