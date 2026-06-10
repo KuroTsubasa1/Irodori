@@ -317,8 +317,8 @@
     const paintTool = name === "brush" || name === "ring" || name === "fill";
     $("palette").classList.toggle("hide", !paintTool);
     Viewer.setTool(name === "brush" ? "paint" : (name === "ring" || name === "fill" || name === "split") ? "pick" : "orbit");
-    Viewer.enableHover(name === "brush" || name === "ring" || name === "split");
-    if (name !== "split" && name !== "ring") clearHoverPreview();
+    Viewer.enableHover(name === "brush" || name === "ring" || name === "split" || name === "fill");
+    if (name !== "split" && name !== "ring" && name !== "fill") clearHoverPreview();
     if (doc && (paintTool || name === "split") && doc.meshes.some((m) => !m._sub)) {
       busy("Preparing tool…", () => { for (const m of doc.meshes) Cleanup.buildSubGraph(m); });
     }
@@ -423,7 +423,7 @@
 
   function onHover(hit) {
     lastHit = hit;
-    if (activeTool === "split" || activeTool === "ring") {
+    if (activeTool === "split" || activeTool === "ring" || activeTool === "fill") {
       Viewer.hideCursor();
       if (!hit || hit.localSub == null) { clearHoverPreview(); return; }
       if (previewCache && previewCache.tool === activeTool && previewCache.meshIndex === hit.meshIndex && previewCache.members.has(hit.localSub)) return;
@@ -432,6 +432,8 @@
       let subs;
       if (activeTool === "split") {
         subs = Cleanup.selectColorRegion(m, hit.localSub, claimedByMesh()[hit.meshIndex]);
+      } else if (activeTool === "fill") {
+        subs = Cleanup.selectColorRegion(m, hit.localSub); // fillRegion's flood (no claimed-exclusion)
       } else {
         const fa = Cleanup.featureAxis(m, hit.localSub, ringNeighborhood(), hit.normal.x, hit.normal.y, hit.normal.z);
         subs = Cleanup.selectBandAxis(m, hit.localSub, ringHalf(), fa.ax, fa.ay, fa.az);
@@ -453,6 +455,7 @@
   Viewer.onHover(onHover);
   function doFill(hit) {
     if (previewActive) { restore(current()); previewActive = false; }
+    clearHoverPreview();
     const m = doc.meshes[hit.meshIndex];
     const target = $("fillAuto").checked ? null : paintState;
     const res = Cleanup.fillRegion(m, hit.localSub, target);
