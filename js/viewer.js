@@ -329,6 +329,8 @@
 
   // parts: [{ meshIndex, subs, state }]
   function setSplitParts(parts) {
+    const prevById = new Map();
+    for (const o of splitObjs) if (o.id != null) prevById.set(o.id, o.cur);
     clearSplitObjs();
     clearRemainderCaps();
     if (!geom || !parts || !parts.length) return;
@@ -351,7 +353,9 @@
       dir.normalize();
       const target = dir.multiplyScalar(r * EXPLODE_K);
       root.add(mesh);
-      splitObjs.push({ mesh, target, cur: new THREE.Vector3() });
+      const cur = prevById.get(p.id) || new THREE.Vector3();
+      mesh.position.copy(cur);
+      splitObjs.push({ id: p.id, mesh, target, cur });
       const capMesh = capMeshFor(p, s);
       if (capMesh) { root.add(capMesh); remainderCapObjs.push(capMesh); }
     }

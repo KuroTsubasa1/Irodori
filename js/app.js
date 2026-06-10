@@ -22,6 +22,7 @@
   let stroke = null; // active brush stroke
   let lastHit = null; // last hovered surface hit (for live cursor)
   let splitParts = []; // [{ meshIndex, subs:Int32Array, state, method }]
+  let splitSeq = 0; // stable id per split part (for animation carry-over)
   const claimedByMesh = () => {
     const sets = doc.meshes.map(() => new Set());
     for (const p of splitParts) for (const s of p.subs) sets[p.meshIndex].add(s);
@@ -43,7 +44,7 @@
   function snap() {
     return {
       meshes: doc.meshes.map((m) => ({ paints: m.paints.slice(), dom: Int32Array.from(m.dom) })),
-      splits: splitParts.map((p) => ({ meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method })),
+      splits: splitParts.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method })),
     };
   }
   function restore(state) {
@@ -52,7 +53,7 @@
       m.dom = Int32Array.from(state.meshes[i].dom);
       Cleanup.invalidateSub(m);
     });
-    splitParts = state.splits.map((p) => ({ meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method }));
+    splitParts = state.splits.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method }));
   }
   const current = () => history[histIndex].state;
   function pushHistory(label, stateClone) {
@@ -324,7 +325,7 @@
     if (hit.localSub == null) return;
     const subs = Cleanup.selectColorRegion(m, hit.localSub);
     if (!subs.length) { toast("Nothing to split there", true); return; }
-    splitParts.push({ meshIndex: hit.meshIndex, subs, state: hit.state, method: $("capMethod").value });
+    splitParts.push({ id: splitSeq++, meshIndex: hit.meshIndex, subs, state: hit.state, method: $("capMethod").value });
     pushHistory("Split");
     render(null);
     toast("Split " + subs.length.toLocaleString() + " sub-triangles into a new solid");
