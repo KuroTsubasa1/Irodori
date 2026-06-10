@@ -7,9 +7,16 @@ const path = require("node:path");
 function loadModules() {
   const sandbox = {};
   sandbox.window = sandbox;
+  sandbox.self = sandbox;
   sandbox.console = console;
   vm.createContext(sandbox);
-  for (const f of ["js/paint.js", "js/cleanup.js", "js/split.js"]) {
+  for (const f of [
+    "vendor/three.min.js",
+    "vendor/poly2tri.min.js",
+    "js/paint.js",
+    "js/cleanup.js",
+    "js/split.js",
+  ]) {
     const code = fs.readFileSync(path.join(__dirname, "..", f), "utf8");
     vm.runInContext(code, sandbox, { filename: f });
   }
@@ -17,6 +24,8 @@ function loadModules() {
     Paint: sandbox.Paint,
     Cleanup: sandbox.Cleanup,
     Split: sandbox.Split,
+    THREE: sandbox.THREE,
+    poly2tri: sandbox.poly2tri,
     window: sandbox,
   };
 }
