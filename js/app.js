@@ -234,13 +234,14 @@
     isolated = target;
     if (target.kind === "mesh") {
       Viewer.setVisibleMeshes(new Set([target.index]));
-      render(null);
-      Viewer.setPartVisibility(new Set()); // hide all parts
-      Viewer.frame();
-    } else { // part
-      Viewer.setVisibleMeshes(new Set()); // hide all main meshes
-      render(null);
+      render(null);                       // rebuild with only this mesh
+      Viewer.setMainVisible(true);
+      Viewer.setPartVisibility(new Set()); // hide all split parts
+      Viewer.frame();                      // recenter on the built geometry
+    } else { // kind === "part" — view-only: hide the main mesh, show+pin the part
+      Viewer.setMainVisible(false);
       Viewer.setPartVisibility(new Set([target.id]));
+      Viewer.pinPart(target.id);           // park it at origin (no explode)
       Viewer.frame(Viewer.partObject(target.id));
     }
     buildObjects();
@@ -249,6 +250,7 @@
     isolated = null;
     Viewer.setVisibleMeshes(null);
     render(null);
+    Viewer.setMainVisible(true);
     Viewer.setPartVisibility(null);
     Viewer.frame();
     buildObjects();

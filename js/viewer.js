@@ -364,6 +364,17 @@
   }
 
   function setVisibleMeshes(set) { visibleMeshes = set; }
+  // Show/hide the main merged mesh + its hole-fill caps without rebuilding.
+  function setMainVisible(v) {
+    if (meshObj) meshObj.visible = v;
+    if (!v) for (const m of remainderCapObjs) m.visible = false;
+  }
+  // Pin a split part at the model origin (un-explode it, stop its animation) so
+  // it sits at its true model-space location — used when isolating a part.
+  function pinPart(id) {
+    const o = splitObjs.find((x) => x.id === id);
+    if (o) { o.cur.set(0, 0, 0); o.target.set(0, 0, 0); o.mesh.position.set(0, 0, 0); }
+  }
   // Show only the split parts whose id is in idSet (null = show all parts).
   function setPartVisibility(idSet) {
     for (const o of splitObjs) o.mesh.visible = !idSet || idSet.has(o.id);
@@ -531,10 +542,13 @@
   }
 
   function frame(obj) {
-    const src = (obj && obj.geometry && obj.geometry.boundingSphere) ? obj.geometry.boundingSphere
-      : (geom ? geom.boundingSphere : null);
-    if (!src) return;
-    const c = src.center, r = src.radius || 50;
+    let c, r;
+    if (obj && obj.geometry && obj.geometry.boundingSphere) {
+      c = obj.geometry.boundingSphere.center.clone().add(obj.position); // world center
+      r = obj.geometry.boundingSphere.radius || 50;
+    } else if (geom && geom.boundingSphere) {
+      c = geom.boundingSphere.center; r = geom.boundingSphere.radius || 50;
+    } else return;
     controls.target.copy(c);
     const dir = new THREE.Vector3(0.5, -1.0, 0.45).normalize();
     camera.position.copy(c).add(dir.multiplyScalar(r * 2.6));
@@ -563,6 +577,8 @@
     setPreview,
     clearPreview,
     setVisibleMeshes,
+    setMainVisible,
+    pinPart,
     setPartVisibility,
     partObject,
   };
