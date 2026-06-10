@@ -349,8 +349,6 @@
   // A double-sided mesh that fills the hole a split part left, built from the
   // part's cap (reversed so it faces out of the remainder). Stays at the original
   // position (no explode offset), so it plugs the hole while the part floats away.
-  // With thickness > 0 the descriptor includes the skirt wall + recessed face —
-  // keep ALL of it: the preview must show the pocket the export actually carves.
   function capMeshFor(part, solid) {
     const cap = solid.cap;
     if (!cap || !cap.tris || !cap.tris.length) return null;
@@ -432,7 +430,7 @@
     const r = geom.boundingSphere ? geom.boundingSphere.radius || 50 : 50;
     const built = [];
     for (const p of parts) {
-      const s = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "liepa", p.thickness || 0);
+      const s = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "liepa");
       const gg = new THREE.BufferGeometry();
       gg.setAttribute("position", new THREE.BufferAttribute(s.positions, 3));
       gg.setIndex(new THREE.BufferAttribute(s.indices, 1));

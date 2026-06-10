@@ -6,9 +6,8 @@
   // Build a capped watertight solid from leaf sub-triangle indices (indices into
   // the mesh's buildSubGraph enumeration).
   // Returns { positions:Float32Array, indices:Uint32Array, triState:Int32Array, state }.
-  function solidFromSubs(mesh, subs, method, thickness) {
+  function solidFromSubs(mesh, subs, method) {
     method = method || "centroid";
-    thickness = +thickness || 0;
     const g = Cleanup.buildSubGraph(mesh);
     const { sv, vx, vy, vz, subLeaf, midOf } = g;
 
@@ -68,21 +67,6 @@
 
     const out = F.slice(), outSt = triSt.slice();
 
-    // per-local-vertex area-weighted patch normals (inward offset directions)
-    let acc = null;
-    if (thickness > 0) {
-      acc = new Float64Array(px.length * 3);
-      for (let i = 0; i < F.length; i += 3) {
-        const a = F[i], b = F[i + 1], c = F[i + 2];
-        const ux = px[b] - px[a], uy = py[b] - py[a], uz = pz[b] - pz[a];
-        const wx = px[c] - px[a], wy = py[c] - py[a], wz = pz[c] - pz[a];
-        const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
-        acc[a * 3] += nx; acc[a * 3 + 1] += ny; acc[a * 3 + 2] += nz;
-        acc[b * 3] += nx; acc[b * 3 + 1] += ny; acc[b * 3 + 2] += nz;
-        acc[c * 3] += nx; acc[c * 3 + 1] += ny; acc[c * 3 + 2] += nz;
-      }
-    }
-
     // boundary edges (used once); rebuild directed adjacency by walking the cycle
     // so that edges chain head-to-tail for extractLoops (bEdge stores first-seen
     // direction which can be inconsistent across polygons).
@@ -125,33 +109,15 @@
     if (boundary.length) {
       // the walk above already ordered the boundary into consistent directed cycles; extractLoops groups them into per-loop vertex arrays
       const loops = Caps.extractLoops(boundary);
-      const surfDir = new Map();
-      for (const e of bEdge.values()) if (e.count === 1) surfDir.set(ekeyG(e.u, e.v), e.u + ">" + e.v);
-      // thickness > 0: triangulate the cap on an INWARD-OFFSET copy of the rim
-      // (each rim vertex pushed t along its negated smooth patch normal), so
-      // the part becomes a printable plug instead of a knife-edged lens
-      let offsetOf = null;
-      if (thickness > 0) {
-        offsetOf = new Map();
-        for (const loop of loops) for (const gid of loop) {
-          if (offsetOf.has(gid)) continue;
-          const li = remap.get(gid);
-          let nx = 0, ny = 0, nz = 0;
-          if (li !== undefined) { nx = acc[li * 3]; ny = acc[li * 3 + 1]; nz = acc[li * 3 + 2]; }
-          // || 1: a cancelled (zero) accumulator leaves the vertex unoffset —
-          // a degenerate-symmetric rim falls back to local t=0 instead of NaN
-          const L = Math.hypot(nx, ny, nz) || 1;
-          offsetOf.set(gid, [vx[gid] - (nx / L) * thickness, vy[gid] - (ny / L) * thickness, vz[gid] - (nz / L) * thickness]);
-        }
-      }
-      const getPt = offsetOf ? (gid) => offsetOf.get(gid) : (gid) => [vx[gid], vy[gid], vz[gid]];
+      const getPt = (gid) => [vx[gid], vy[gid], vz[gid]];
       cap = Caps.triangulateLoops(loops, getPt, method);
       cap.method = method;
       // orient each cap COMPONENT exactly against the surface's boundary
-      // winding; valid on the offset rim too (the offset is a continuous
-      // deformation — winding semantics are unchanged)
+      // winding (replaces the global best-fit-plane heuristic, which inverted
+      // caps on multi-loop parts whose rims face opposite directions)
+      const surfDir = new Map();
+      for (const e of bEdge.values()) if (e.count === 1) surfDir.set(ekeyG(e.u, e.v), e.u + ">" + e.v);
       orientCapComponents(cap, surfDir);
-      if (offsetOf) cap = thickenCap(cap, offsetOf, surfDir);
       // emit the cap into the part: loop verts weld via lid(); extras append locally
       const capLocal = cap.verts.map((gid) => lid(gid));
       const extraBase = px.length;
@@ -213,32 +179,6 @@
       else if (a === o && a > 0) console.warn("solidFromSubs: ambiguous cap orientation; leaving component as-is");
     }
     if (flip.size) cap.tris.forEach((t, ti) => { if (flip.has(find(ti))) { const tmp = t[1]; t[1] = t[2]; t[2] = tmp; } });
-  }
-
-  // Wrap an oriented cap (triangulated on OFFSET rim coordinates but indexed
-  // by rim vids) into a minimum-thickness plug surface: rim vids stay welded
-  // (refs < nR — the wall attaches to the real surface there), the offset rim
-  // copies + the cap's interior points become extras, every cap ref shifts by
-  // nR, and a wall of quads joins rim -> offset rim. Wall winding opposes the
-  // surface's directed boundary (surfDir), the shared diagonal and vertical
-  // edges pair up across quads, and the offset-loop edges oppose the oriented
-  // cap — directed-watertight by construction.
-  function thickenCap(cap0, offsetOf, surfDir) {
-    const nR = cap0.verts.length;
-    const cap = { verts: cap0.verts.slice(), extraPts: [], tris: [], method: cap0.method };
-    for (const vid of cap0.verts) cap.extraPts.push(offsetOf.get(vid));
-    for (const ep of cap0.extraPts) cap.extraPts.push(ep);
-    for (const t of cap0.tris) cap.tris.push([t[0] + nR, t[1] + nR, t[2] + nR]);
-    const idxIn = new Map();
-    cap0.verts.forEach((vid, i) => idxIn.set(vid, i));
-    for (const dir of surfDir.values()) {
-      const gt = dir.indexOf(">");
-      const u = +dir.slice(0, gt), v = +dir.slice(gt + 1);
-      const iu = idxIn.get(u), iv = idxIn.get(v);
-      if (iu === undefined || iv === undefined) continue; // dropped (pinch) chain
-      cap.tris.push([iv, iu, nR + iu], [iv, nR + iu, nR + iv]);
-    }
-    return cap;
   }
 
   // Build the remaining mesh (sub-triangles NOT in any part) as a watertight

@@ -198,7 +198,7 @@
     const partCaps = [];
     for (let pi = 0; pi < splitParts.length; pi++) {
       const p = splitParts[pi];
-      const g = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "liepa", p.thickness || 0);
+      const g = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "liepa");
       partCaps[pi] = g.cap;
       objects.push({
         name: nameFor(p.state), extruder: extruderFor(p.state),
