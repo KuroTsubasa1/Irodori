@@ -203,11 +203,28 @@
   // (within Euclidean radius Rn). The dominant eigenvector is the direction the
   // feature extends (the ear/tail/limb axis). Returns the axis, a ring center on
   // that axis at the click's cross-section, and a representative ring radius.
-  function featureAxis(mesh, seedSub, Rn) {
+  // Optional nx,ny,nz: surface normal — axis is constrained to the plane ⊥ normal.
+  function featureAxis(mesh, seedSub, Rn, nx, ny, nz) {
     const g = buildSubGraph(mesh);
     const { start, list, cen, NS } = g;
     const sx = cen[seedSub * 3], sy = cen[seedSub * 3 + 1], sz = cen[seedSub * 3 + 2];
     const Rn2 = Rn * Rn;
+
+    // Constrain an axis to the plane perpendicular to the surface normal (the
+    // ring's wrap plane contains the normal). No-op when no normal is given.
+    const ortho = (x, y, z) => {
+      if (nx === undefined) return [x, y, z];
+      const d = x * nx + y * ny + z * nz;
+      let ox = x - d * nx, oy = y - d * ny, oz = z - d * nz;
+      let L = Math.hypot(ox, oy, oz);
+      if (L < 1e-6) { // axis ∥ normal: pick any perpendicular
+        ox = ny; oy = -nx; oz = 0;            // n × (0,0,1)
+        L = Math.hypot(ox, oy, oz);
+        if (L < 1e-6) { ox = 0; oy = nz; oz = -ny; L = Math.hypot(ox, oy, oz); } // n × (1,0,0)
+      }
+      return [ox / L, oy / L, oz / L];
+    };
+
     const seen = new Uint8Array(NS);
     const mem = [];
     const stk = [seedSub];
@@ -223,7 +240,7 @@
       }
     }
     const n = mem.length;
-    if (n < 8) return { ax: 0, ay: 0, az: 1, cx: sx, cy: sy, cz: sz, radius: Rn * 0.5 };
+    if (n < 8) { const [eax, eay, eaz] = ortho(0, 0, 1); return { ax: eax, ay: eay, az: eaz, cx: sx, cy: sy, cz: sz, radius: Rn * 0.5 }; }
     let mx = 0, my = 0, mz = 0;
     for (const u of mem) { mx += cen[u * 3]; my += cen[u * 3 + 1]; mz += cen[u * 3 + 2]; }
     mx /= n; my /= n; mz /= n;
@@ -238,16 +255,14 @@
     if (cyy >= cxx && cyy >= czz) { vx = 0; vy = 1; vz = 0; }
     else if (czz >= cxx && czz >= cyy) { vx = 0; vy = 0; vz = 1; }
     for (let k = 0; k < 40; k++) {
-      const nx = cxx * vx + cxy * vy + cxz * vz;
-      const ny = cxy * vx + cyy * vy + cyz * vz;
-      const nz = cxz * vx + cyz * vy + czz * vz;
-      const len = Math.hypot(nx, ny, nz) || 1;
-      vx = nx / len; vy = ny / len; vz = nz / len;
+      const nx2 = cxx * vx + cxy * vy + cxz * vz;
+      const ny2 = cxy * vx + cyy * vy + cyz * vz;
+      const nz2 = cxz * vx + cyz * vy + czz * vz;
+      const len = Math.hypot(nx2, ny2, nz2) || 1;
+      vx = nx2 / len; vy = ny2 / len; vz = nz2 / len;
     }
-    // Snap to vertical when the axis is already nearly vertical — keeps clean
-    // horizontal belts on the torso; clearly-tilted features (ears, tail, limbs)
-    // keep their own axis so the ring wraps them perpendicularly.
-    if (Math.abs(vz) > 0.82) { vx = 0; vy = 0; vz = 1; }
+    // Orthogonalize axis against the surface normal so the ring wraps the surface.
+    const [oax, oay, oaz] = ortho(vx, vy, vz); vx = oax; vy = oay; vz = oaz;
     // representative cross-section radius (avg perpendicular spread)
     let r = 0;
     for (const u of mem) {

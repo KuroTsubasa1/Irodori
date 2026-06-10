@@ -21,8 +21,8 @@
   let paintState = null; // selected palette color
   let stroke = null; // active brush stroke
   let lastHit = null; // last hovered surface hit (for live cursor)
-  let previewCache = null; // { meshIndex, members:Set<localSub>, globalSubs }
-  function clearSplitPreview() { if (previewCache) { Viewer.clearPreview(); previewCache = null; } }
+  let previewCache = null; // { tool, meshIndex, members:Set<localSub>, globalSubs, subs }
+  function clearHoverPreview() { if (previewCache) { Viewer.clearPreview(); previewCache = null; } }
   let splitParts = []; // [{ meshIndex, subs:Int32Array, state, method }]
   let splitSeq = 0; // stable id per split part (for animation carry-over)
   let isolated = null; // { kind:"mesh", index } | { kind:"part", id } | null
@@ -275,7 +275,7 @@
     $("palette").classList.toggle("hide", !paintTool);
     Viewer.setTool(name === "brush" ? "paint" : (name === "ring" || name === "fill" || name === "split") ? "pick" : "orbit");
     Viewer.enableHover(name === "brush" || name === "ring" || name === "split");
-    if (name !== "split") clearSplitPreview();
+    if (name !== "split" && name !== "ring") clearHoverPreview();
     if (doc && (paintTool || name === "split") && doc.meshes.some((m) => !m._sub)) {
       busy("Preparing tool…", () => { for (const m of doc.meshes) Cleanup.buildSubGraph(m); });
     }
@@ -362,9 +362,15 @@
     if (paintState == null) return;
     if (previewActive) { restore(current()); previewActive = false; }
     const m = doc.meshes[hit.meshIndex];
-    const fa = Cleanup.featureAxis(m, hit.localSub, ringNeighborhood());
-    const subs = Cleanup.selectBandAxis(m, hit.localSub, ringHalf(), fa.ax, fa.ay, fa.az);
+    let subs;
+    if (previewCache && previewCache.tool === "ring" && previewCache.meshIndex === hit.meshIndex && previewCache.members.has(hit.localSub)) {
+      subs = previewCache.subs;
+    } else {
+      const fa = Cleanup.featureAxis(m, hit.localSub, ringNeighborhood(), hit.normal.x, hit.normal.y, hit.normal.z);
+      subs = Cleanup.selectBandAxis(m, hit.localSub, ringHalf(), fa.ax, fa.ay, fa.az);
+    }
     if (!subs.length) return;
+    clearHoverPreview();
     Cleanup.applyStates(m, subs, paintState);
     pushHistory("Ring");
     render(null);
@@ -372,32 +378,33 @@
     toast("Ring · " + subs.length.toLocaleString() + " sub-triangles");
   }
 
-  // hover cursor preview (black ring) — follows the surface; for the ring tool
-  // it orients to the local feature axis so it wraps ears/tail correctly.
   function onHover(hit) {
     lastHit = hit;
-    if (activeTool === "split") {
+    if (activeTool === "split" || activeTool === "ring") {
       Viewer.hideCursor();
-      if (!hit || hit.localSub == null) { clearSplitPreview(); return; }
-      if (previewCache && previewCache.meshIndex === hit.meshIndex && previewCache.members.has(hit.localSub)) return;
-      clearSplitPreview();
+      if (!hit || hit.localSub == null) { clearHoverPreview(); return; }
+      if (previewCache && previewCache.tool === activeTool && previewCache.meshIndex === hit.meshIndex && previewCache.members.has(hit.localSub)) return;
+      clearHoverPreview();
       const m = doc.meshes[hit.meshIndex];
-      const subs = Cleanup.selectColorRegion(m, hit.localSub, claimedByMesh()[hit.meshIndex]);
+      let subs;
+      if (activeTool === "split") {
+        subs = Cleanup.selectColorRegion(m, hit.localSub, claimedByMesh()[hit.meshIndex]);
+      } else {
+        const fa = Cleanup.featureAxis(m, hit.localSub, ringNeighborhood(), hit.normal.x, hit.normal.y, hit.normal.z);
+        subs = Cleanup.selectBandAxis(m, hit.localSub, ringHalf(), fa.ax, fa.ay, fa.az);
+      }
+      if (!subs.length) return;
       const members = new Set(subs);
       const g = [];
       for (const s of subs) { const gi = Viewer.toGlobalSub(hit.meshIndex, s); if (gi >= 0) g.push(gi); }
       Viewer.setPreview(g);
-      previewCache = { meshIndex: hit.meshIndex, members, globalSubs: g };
+      previewCache = { tool: activeTool, meshIndex: hit.meshIndex, members, globalSubs: g, subs };
       return;
     }
     if (!hit) { Viewer.hideCursor(); return; }
     if (activeTool === "brush") {
       const n = hit.normal;
       Viewer.setCursorTransform(hit.point.x, hit.point.y, hit.point.z, n.x, n.y, n.z, brushRadius());
-    } else if (activeTool === "ring") {
-      const m = doc.meshes[hit.meshIndex];
-      const fa = Cleanup.featureAxis(m, hit.localSub, ringNeighborhood());
-      Viewer.setCursorTransform(fa.cx, fa.cy, fa.cz, fa.ax, fa.ay, fa.az, fa.radius);
     }
   }
   Viewer.onHover(onHover);
@@ -414,7 +421,7 @@
   }
   function doSplit(hit) {
     if (previewActive) { restore(current()); previewActive = false; }
-    clearSplitPreview();
+    clearHoverPreview();
     const m = doc.meshes[hit.meshIndex];
     if (hit.localSub == null) return;
     const subs = Cleanup.selectColorRegion(m, hit.localSub, claimedByMesh()[hit.meshIndex]);
@@ -493,7 +500,7 @@
   function doReset() {
     if (!doc) return;
     if (isolated) { isolated = null; Viewer.setVisibleMeshes(null); }
-    clearSplitPreview();
+    clearHoverPreview();
     restore(history[0].state);
     previewActive = false;
     pushHistory("Reset to original");
@@ -505,7 +512,7 @@
   function jumpTo(idx) {
     if (!doc || idx < 0 || idx >= history.length) return;
     if (isolated) { isolated = null; Viewer.setVisibleMeshes(null); }
-    clearSplitPreview();
+    clearHoverPreview();
     previewActive = false; histIndex = idx;
     restore(current()); render(null); updateStats(); updateHist();
     $("previewInfo").textContent = "";
@@ -565,7 +572,7 @@
   });
   $("ringThick").addEventListener("input", () => {
     updateSizeDots();
-    if (activeTool === "ring" && lastHit) onHover(lastHit);
+    if (activeTool === "ring") { clearHoverPreview(); if (lastHit) onHover(lastHit); }
   });
   document.querySelectorAll("#symAxes button").forEach((b) =>
     b.addEventListener("click", () => b.classList.toggle("on"))
