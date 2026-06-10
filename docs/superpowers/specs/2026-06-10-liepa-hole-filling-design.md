@@ -108,10 +108,28 @@ silently emitted centroid fans. The shipped fix (commit `7fc050d`):
 - The per-loop centroid fallback now **warns to the console** (no silent
   degradation).
 
-Measured on the reference band (2,108- and 2,712-vertex rims): **1.55 s
+Measured on the reference band (2,108- and 2,712-vertex rims): **~1.2 s
 total**, 3,000 tris + real refined interior points per loop, watertight. A
 fractal-rim regression test (1,200 fine vertices, default options, < 5 s,
 budget held, rim covered exactly once) pins this.
+
+A second review-driven round (commit `8f3f2df`) fixed two winding issues:
+
+- **Direction-aware edge flips.** The flip rewrite assumed the sorted edge key
+  matched the triangle's stored edge direction, inverting ~35 % of cap
+  triangles (watertight-by-edge-count tests are winding-blind; the viewer's
+  double-sided material masked it). Flips now check the actual direction.
+- **Fan strips instead of polygon-DP strips.** Fractal fine chains weave
+  across their coarse chord, making the strip polygon self-intersecting — any
+  polygon triangulation of it folds. Strips are now an endpoint fan; the
+  residual sign-alternating **micro-sliver folds in the rim band are inherent
+  to rim-vertex-only strip triangulations of weaving chains** and are accepted
+  (sub-print scale, orientation-consistent, watertight; visible only as a
+  faint brushed texture at the rim).
+- The winding regression asserts the principled invariants: zero
+  double-directed edges, every rim edge traversed loop-forward exactly once,
+  and strongly-inverted triangles carrying **< 2 % of cap area** (the flip bug
+  scored ~30 %; micro-slivers stay well under the bound).
 
 ## Testing
 
