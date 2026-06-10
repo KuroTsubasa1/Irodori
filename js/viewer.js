@@ -400,6 +400,27 @@
   // The THREE.Mesh of the split part with the given id (for framing on it).
   function partObject(id) { const o = splitObjs.find((x) => x.id === id); return o ? o.mesh : null; }
 
+  let cutPlaneObj = null;
+  // Show a translucent cut-plane preview ({px,py,pz,nx,ny,nz}) or hide (null).
+  function setCutPlane(plane) {
+    if (!plane) { if (cutPlaneObj) cutPlaneObj.visible = false; return; }
+    if (!cutPlaneObj) {
+      const pg = new THREE.PlaneGeometry(1, 1);
+      const pm = new THREE.MeshBasicMaterial({ color: 0xff5d4e, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
+      cutPlaneObj = new THREE.Mesh(pg, pm);
+      cutPlaneObj.add(new THREE.LineSegments(new THREE.EdgesGeometry(pg), new THREE.LineBasicMaterial({ color: 0xec4636 })));
+      cutPlaneObj.renderOrder = 998;
+      scene.add(cutPlaneObj);
+    }
+    const r = geom && geom.boundingSphere ? geom.boundingSphere.radius || 50 : 50;
+    cutPlaneObj.scale.setScalar(r * 3);
+    cutPlaneObj.position.set(plane.px, plane.py, plane.pz);
+    tmpV.set(plane.nx, plane.ny, plane.nz).normalize();
+    tmpQ.setFromUnitVectors(ZUP, tmpV); // PlaneGeometry faces +Z
+    cutPlaneObj.quaternion.copy(tmpQ);
+    cutPlaneObj.visible = true;
+  }
+
   // parts: [{ meshIndex, subs, state }]
   function setSplitParts(parts) {
     const prevById = new Map();
@@ -599,6 +620,7 @@
     toGlobalSub,
     subTriangleCount: () => totalSub,
     setSplitParts,
+    setCutPlane,
     setPreview,
     clearPreview,
     setVisibleMeshes,

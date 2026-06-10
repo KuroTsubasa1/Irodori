@@ -46,6 +46,11 @@
             <span>Split</span>
             <kbd class="kbd">S</kbd>
           </button>
+          <button class="tool" data-tool="cut" title="Cut (C) — plane cut into two solids">
+            <svg class="ic" viewBox="0 0 24 24"><path d="M4 5l16 14"/><path d="M20 5L4 19"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/></svg>
+            <span>Cut</span>
+            <kbd class="kbd">C</kbd>
+          </button>
         </div>
 
         <div class="topactions">
@@ -111,6 +116,23 @@
           </select>
           <span class="muted">Click a colored part to lift it out as its own solid.</span>
           <button id="exportSplitBtn" class="secondary slim">Export split (.3mf)</button>
+        </div>
+
+        <div class="opt" data-panel="cut" hidden>
+          <span class="optlabel">Axis</span>
+          <div class="axes" id="cutAxes">
+            <button type="button" data-axis="0">X</button>
+            <button type="button" data-axis="1">Y</button>
+            <button type="button" data-axis="2" class="on">Z</button>
+          </div>
+          <span class="optlabel">Position</span>
+          <input type="range" id="cutPos" min="0" max="100" value="50" />
+          <span class="optlabel">Tilt</span>
+          <input type="range" id="cutTiltA" min="-60" max="60" value="0" />
+          <input type="range" id="cutTiltB" min="-60" max="60" value="0" />
+          <button id="cutBoth" class="secondary slim">Keep both</button>
+          <button id="cutUpper" class="ghost slim">Keep upper</button>
+          <button id="cutLower" class="ghost slim">Keep lower</button>
         </div>
 
         <div class="palette" id="palette" title="Paint color"></div>
@@ -202,6 +224,7 @@
     <script src="js/liepa.js"></script>
     <script src="js/caps.js"></script>
     <script src="js/split.js"></script>
+    <script src="js/planecut.js"></script>
     <script src="js/viewer.js"></script>
     <script src="js/app.js"></script>
   </body>

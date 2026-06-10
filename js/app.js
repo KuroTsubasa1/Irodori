@@ -9,6 +9,7 @@
   let doc = null;
   let fileName = "model.3mf";
   let modelSize = 100;
+  let modelBBox = { lo: [0, 0, 0], hi: [100, 100, 100] };
 
   // history
   let history = [];
@@ -49,9 +50,13 @@
       meshes: doc.meshes.map((m) => ({ paints: m.paints.slice(), dom: Int32Array.from(m.dom) })),
       splits: splitParts.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method })),
       filaments: doc.filaments.map((f) => ({ index: f.index, hex: f.hex })),
+      meshList: doc.meshes.slice(),
+      synthetic: !!doc.synthetic,
     };
   }
   function restore(state) {
+    if (state.meshList) doc.meshes = state.meshList.slice();
+    doc.synthetic = !!state.synthetic;
     doc.meshes.forEach((m, i) => {
       m.paints = state.meshes[i].paints.slice();
       m.dom = Int32Array.from(state.meshes[i].dom);
@@ -127,6 +132,7 @@
       }
     }
     modelSize = Math.hypot(d - a, e - b, f - c) || 100;
+    modelBBox = { lo: [a, b, c], hi: [d, e, f] };
   }
   const brushRadius = () => { const t = (+$("brushSize").value) / 100; return modelSize * (0.0015 + 0.06 * t * t); };
   const ringHalf = () => { const t = (+$("ringThick").value) / 100; return modelSize * (0.001 + 0.04 * t * t); };
@@ -319,6 +325,7 @@
     Viewer.setTool(name === "brush" ? "paint" : (name === "ring" || name === "fill" || name === "split") ? "pick" : "orbit");
     Viewer.enableHover(name === "brush" || name === "ring" || name === "split" || name === "fill");
     if (name !== "split" && name !== "ring" && name !== "fill") clearHoverPreview();
+    if (name === "cut") updateCutPlane(); else Viewer.setCutPlane(null);
     if (doc && (paintTool || name === "split") && doc.meshes.some((m) => !m._sub)) {
       busy("Preparing tool…", () => { for (const m of doc.meshes) Cleanup.buildSubGraph(m); });
     }
@@ -483,6 +490,58 @@
     else if (activeTool === "fill") doFill(hit);
     else if (activeTool === "split") doSplit(hit);
   });
+
+  function cutPlane() {
+    const axis = +document.querySelector("#cutAxes button.on").dataset.axis;
+    const t = (+$("cutPos").value) / 100;
+    const ta = (+$("cutTiltA").value) * Math.PI / 180;
+    const tb = (+$("cutTiltB").value) * Math.PI / 180;
+    const lo = modelBBox.lo, hi = modelBBox.hi;
+    const p = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
+    p[axis] = lo[axis] + t * (hi[axis] - lo[axis]);
+    const n = [0, 0, 0];
+    n[axis] = 1;
+    const rot = (v, ax2, ang) => { const i = (ax2 + 1) % 3, j = (ax2 + 2) % 3; const vi = v[i], vj = v[j]; v[i] = vi * Math.cos(ang) - vj * Math.sin(ang); v[j] = vi * Math.sin(ang) + vj * Math.cos(ang); };
+    rot(n, (axis + 1) % 3, ta);
+    rot(n, (axis + 2) % 3, tb);
+    return { px: p[0], py: p[1], pz: p[2], nx: n[0], ny: n[1], nz: n[2] };
+  }
+  function updateCutPlane() { if (!doc || activeTool !== "cut") return; Viewer.setCutPlane(cutPlane()); }
+  // Apply the cut: clip targets, replace them with the kept halves, one undo step.
+  function doCut(keep) {
+    if (!doc) return;
+    if (splitParts.length) { toast("Export or undo your split parts before cutting", true); return; }
+    clearHoverPreview();
+    const plane = cutPlane();
+    const targets = isolated && isolated.kind === "mesh" ? new Set([isolated.index]) : null;
+    busy("Cutting…", () => {
+      const out = [];
+      let cutAny = false;
+      doc.meshes.forEach((m, i) => {
+        if (targets && !targets.has(i)) { out.push(m); return; }
+        const r = PlaneCut.cutMesh(m, plane);
+        if (!r.above || !r.below) { out.push(m); return; } // plane missed this mesh
+        cutAny = true;
+        if (keep !== "lower") out.push(r.above);
+        if (keep !== "upper") out.push(r.below);
+      });
+      if (!cutAny) { toast("The plane doesn't intersect the model", true); return; }
+      doc.meshes = out;
+      doc.synthetic = true; // original file XML no longer matches; export via the generated package
+      for (const m of doc.meshes) { Cleanup.invalidateSub(m); m.dom = null; Cleanup.computeDominant(m); }
+      isolated = null;
+      Viewer.setVisibleMeshes(null);
+      computeModelSize();
+      pushHistory(keep === "both" ? "Plane cut" : "Plane cut (keep " + keep + ")");
+      render(null);
+      Viewer.setPartVisibility(null);
+      Viewer.frame();
+      buildObjects();
+      updateStats();
+      updateCutPlane();
+      toast("Cut into " + doc.meshes.length + " object(s)");
+    });
+  }
 
   // ---------- auto-clean ----------
   function updateStats() {
@@ -649,6 +708,16 @@
   $("reframeBtn").addEventListener("click", () => Viewer.frame());
   $("bgToggle").addEventListener("click", () => $("stage").classList.toggle("dark"));
   $("showAllBtn").addEventListener("click", showAll);
+  document.querySelectorAll("#cutAxes button").forEach((b) =>
+    b.addEventListener("click", () => {
+      document.querySelectorAll("#cutAxes button").forEach((x) => x.classList.toggle("on", x === b));
+      updateCutPlane();
+    })
+  );
+  ["cutPos", "cutTiltA", "cutTiltB"].forEach((id) => $(id).addEventListener("input", updateCutPlane));
+  $("cutBoth").addEventListener("click", () => doCut("both"));
+  $("cutUpper").addEventListener("click", () => doCut("upper"));
+  $("cutLower").addEventListener("click", () => doCut("lower"));
 
   document.addEventListener("keydown", (e) => {
     if (!doc) return;
@@ -659,7 +728,7 @@
     if (mod || e.altKey) return;
     const tag = (e.target && e.target.tagName) || "";
     if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
-    const tool = { o: "orbit", r: "rotate", b: "brush", n: "ring", f: "fill", s: "split" }[e.key.toLowerCase()];
+    const tool = { o: "orbit", r: "rotate", b: "brush", n: "ring", f: "fill", s: "split", c: "cut" }[e.key.toLowerCase()];
     if (tool) { e.preventDefault(); setTool(tool); }
   });
 
