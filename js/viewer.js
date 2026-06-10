@@ -22,6 +22,7 @@
   let renderMap = [];    // per mesh: rendered-sub index -> original localSub
   let origToRender = []; // per mesh: Map<original localSub, rendered-sub index>
   let splitObjs = [];    // [{ mesh, target:THREE.Vector3, cur:THREE.Vector3 }]
+  let remainderCapObjs = []; // separate double-sided meshes that fill split holes
   let claimedSets = [];  // per mesh: Set<localSub> hidden from the main mesh
 
   // picking
@@ -273,14 +274,50 @@
     splitObjs = [];
   }
 
+  const CAP_FILL = new THREE.Color("#9aa3b2").convertSRGBToLinear();
+  function clearRemainderCaps() {
+    for (const m of remainderCapObjs) { root.remove(m); m.geometry.dispose(); m.material.dispose(); }
+    remainderCapObjs = [];
+  }
+  // A double-sided mesh that fills the hole a split part left, built from the
+  // part's cap (reversed so it faces out of the remainder). Stays at the original
+  // position (no explode offset), so it plugs the hole while the part floats away.
+  function capMeshFor(part, solid) {
+    const cap = solid.cap;
+    if (!cap || !cap.tris || !cap.tris.length) return null;
+    const g = Cleanup.buildSubGraph(doc.meshes[part.meshIndex]);
+    const nv = cap.verts.length + cap.extraPts.length;
+    const pos = new Float32Array(nv * 3);
+    for (let i = 0; i < cap.verts.length; i++) {
+      const gid = cap.verts[i];
+      pos[i * 3] = g.vx[gid]; pos[i * 3 + 1] = g.vy[gid]; pos[i * 3 + 2] = g.vz[gid];
+    }
+    for (let i = 0; i < cap.extraPts.length; i++) {
+      const e = cap.extraPts[i], o = (cap.verts.length + i) * 3;
+      pos[o] = e[0]; pos[o + 1] = e[1]; pos[o + 2] = e[2];
+    }
+    const idx = new Uint32Array(cap.tris.length * 3);
+    for (let t = 0; t < cap.tris.length; t++) {
+      // reversed winding (remainder side); double-sided anyway for safe visibility
+      idx[t * 3] = cap.tris[t][0]; idx[t * 3 + 1] = cap.tris[t][2]; idx[t * 3 + 2] = cap.tris[t][1];
+    }
+    const gg = new THREE.BufferGeometry();
+    gg.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    gg.setIndex(new THREE.BufferAttribute(idx, 1));
+    gg.computeVertexNormals();
+    const mat = new THREE.MeshStandardMaterial({ color: CAP_FILL.clone(), roughness: 0.85, metalness: 0.0, side: THREE.DoubleSide });
+    return new THREE.Mesh(gg, mat);
+  }
+
   // parts: [{ meshIndex, subs, state }]
   function setSplitParts(parts) {
     clearSplitObjs();
+    clearRemainderCaps();
     if (!geom || !parts || !parts.length) return;
     const c = geom.boundingSphere ? geom.boundingSphere.center : new THREE.Vector3();
     const r = geom.boundingSphere ? geom.boundingSphere.radius || 50 : 50;
     for (const p of parts) {
-      const s = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs));
+      const s = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "earcut");
       const gg = new THREE.BufferGeometry();
       gg.setAttribute("position", new THREE.BufferAttribute(s.positions, 3));
       gg.setIndex(new THREE.BufferAttribute(s.indices, 1));
@@ -297,6 +334,8 @@
       const target = dir.multiplyScalar(r * EXPLODE_K);
       root.add(mesh);
       splitObjs.push({ mesh, target, cur: new THREE.Vector3() });
+      const capMesh = capMeshFor(p, s);
+      if (capMesh) { root.add(capMesh); remainderCapObjs.push(capMesh); }
     }
   }
 
