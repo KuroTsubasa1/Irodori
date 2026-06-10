@@ -421,10 +421,15 @@
       });
       const mesh = new THREE.Mesh(gg, mat);
       const pc = gg.boundingSphere.center;
-      // proportional exploded view: every pair of parts separates by ×(1+K),
-      // so adjacent parts get a real gap instead of staying glued together
-      const target = new THREE.Vector3().subVectors(pc, c).multiplyScalar(EXPLODE_K);
-      if (target.lengthSq() < 1e-9) target.set(0, 0, r * 0.15); // part centered at the model center (rare): nudge along +Z
+      // proportional exploded view (pairs separate by ×(1+K)), floored so the
+      // part's bounding sphere CLEARS the model's bounding sphere along its
+      // ray — near-axis parts (neck rings) pop past the head, not into it
+      const off = new THREE.Vector3().subVectors(pc, c);
+      const d = off.length();
+      if (d < 1e-6) off.set(0, 0, 1); else off.divideScalar(d);
+      const partR = gg.boundingSphere.radius || 1;
+      const dist = Math.max(EXPLODE_K * d, r + 1.05 * partR + 0.05 * r - d);
+      const target = off.multiplyScalar(dist);
       root.add(mesh);
       const cur = prevById.get(p.id) || new THREE.Vector3();
       mesh.position.copy(cur);
