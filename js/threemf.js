@@ -233,5 +233,26 @@
     });
   }
 
-  global.ThreeMF = { load, exportZip, exportSplit };
+  // Extend a Bambu project_settings.config (JSON text) to include newly-added
+  // filaments. Every per-filament array (length === origCount) gets copies of its
+  // element [0] appended (so the new filament inherits filament-0's slicer
+  // settings); filament_colour is set to all filaments' #RRGGBBFF colours.
+  function extendFilamentConfig(configText, origCount, filaments) {
+    const j = JSON.parse(configText);
+    const add = filaments.length - origCount;
+    if (add > 0) {
+      for (const k in j) {
+        if (Array.isArray(j[k]) && j[k].length === origCount) {
+          const fill = j[k][0];
+          for (let i = 0; i < add; i++) {
+            j[k].push(typeof fill === "object" && fill !== null ? JSON.parse(JSON.stringify(fill)) : fill);
+          }
+        }
+      }
+    }
+    j.filament_colour = filaments.map((f) => (f.hex.length >= 7 ? f.hex.slice(0, 7) : f.hex) + "FF");
+    return JSON.stringify(j);
+  }
+
+  global.ThreeMF = { load, exportZip, exportSplit, extendFilamentConfig };
 })(window);

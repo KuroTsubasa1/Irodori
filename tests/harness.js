@@ -17,6 +17,7 @@ function loadModules() {
     "js/cleanup.js",
     "js/caps.js",
     "js/split.js",
+    "js/threemf.js",
   ]) {
     const code = fs.readFileSync(path.join(__dirname, "..", f), "utf8");
     vm.runInContext(code, sandbox, { filename: f });
@@ -28,6 +29,7 @@ function loadModules() {
     Caps: sandbox.Caps,
     THREE: sandbox.THREE,
     poly2tri: sandbox.poly2tri,
+    ThreeMF: sandbox.ThreeMF,
     window: sandbox,
   };
 }
