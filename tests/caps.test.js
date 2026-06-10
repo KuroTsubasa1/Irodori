@@ -190,3 +190,14 @@ test("coplanar asymmetric hole caps weld to the right vertices (area check)", ()
     assert.ok(Math.abs(sum - expected) < 1e-6, method + ": cap area " + sum.toFixed(4) + " == outer-hole " + expected);
   }
 });
+
+test("liepa method fills each loop independently with refined interior points", () => {
+  const { Caps } = loadModules();
+  const n = 40;
+  const coords = {};
+  for (let i = 0; i < n; i++) { const a = (i / n) * Math.PI * 2; coords[i] = [Math.cos(a) * 8, Math.sin(a) * 8, Math.sin(2 * a)]; }
+  const cap = Caps.triangulateLoops([[...Array(n).keys()]], (v) => coords[v], "liepa");
+  assert.ok(cap.tris.length >= n - 2, "filled");
+  assert.ok(cap.extraPts.length > 0, "refined interior points present");
+  assert.equal(capBoundaryEdges(cap.tris).size, n, "rim covered exactly once");
+});

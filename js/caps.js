@@ -174,6 +174,30 @@
       return { verts, extraPts, tris };
     }
 
+    if (method === "liepa") {
+      // Liepa pipeline fills each loop independently (no outer+hole nesting;
+      // coplanar island holes should use earcut/cdt). Falls back to a centroid
+      // fan per loop on any failure, preserving the watertight guarantee.
+      const LP = global.Liepa;
+      if (!LP || !LP.fillLoop) throw new Error("Liepa module not loaded");
+      for (const loop of loops) {
+        if (loop.length < 3) continue;
+        const before = tris.length;
+        try {
+          const fill = LP.fillLoop(loop, (v) => getPt(v));
+          const base = verts.length + extraPts.length; // current extra offset
+          for (const ep of fill.extraPts) extraPts.push(ep);
+          for (const t of fill.tris) {
+            tris.push(t.map((r) => (r < loop.length ? idxOf(loop[r]) : base + (r - loop.length))));
+          }
+        } catch (e) {
+          while (tris.length > before) tris.pop();
+          emitCentroidFan(loop);
+        }
+      }
+      return { verts, extraPts, tris };
+    }
+
     // --- earcut / cdt: per-loop planes; classify outer+holes in the outer's own frame ---
     // each loop -> its own best-fit plane (a concatenated-loops plane is unsound:
     // opposite-winding rims cancel Newell's normal), own-plane CCW projection, area,

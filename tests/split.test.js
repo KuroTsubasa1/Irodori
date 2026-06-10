@@ -10,7 +10,7 @@ function regionOfState(Cleanup, mesh, state) {
 
 test("solidFromSubs caps an open region into a watertight solid (all methods)", () => {
   const { Cleanup, Split } = loadModules();
-  for (const method of ["centroid", "projected", "earcut", "cdt"]) {
+  for (const method of ["centroid", "projected", "earcut", "cdt", "liepa"]) {
     const mesh = makeTetra();
     const subs = regionOfState(Cleanup, mesh, 1); // 3 open faces (a 'bowl')
     const solid = Split.solidFromSubs(mesh, Array.from(subs), method);
@@ -105,16 +105,18 @@ test("remainderSolid: reversed cap winding is opposite the part cap", () => {
   assert.ok(rem.triState.length > 0);
 });
 
-test("solidFromSubs caps an open tube with two independent end caps", () => {
+test("solidFromSubs caps an open tube with independent end caps (earcut + liepa)", () => {
   const { Cleanup, Split } = loadModules();
-  const tube = makeOpenTube();
-  const g = Cleanup.buildSubGraph(tube);
-  const solid = Split.solidFromSubs(tube, [...Array(g.NS).keys()], "earcut");
-  // watertight: an annulus would also be watertight but with 8 cap tris;
-  // the old drop-one-loop failure is 4 tris + 1 extraPt and NOT watertight.
-  for (const [, n] of edgeUseCounts(solid.indices)) assert.equal(n, 2, "watertight");
-  assert.equal(solid.cap.tris.length, 4, "two 2-tri end caps");
-  assert.equal(solid.cap.extraPts.length, 0, "no fallback fan");
+  for (const method of ["earcut", "liepa"]) {
+    const tube = makeOpenTube();
+    const g = Cleanup.buildSubGraph(tube);
+    const solid = Split.solidFromSubs(tube, [...Array(g.NS).keys()], method);
+    for (const [, n] of edgeUseCounts(solid.indices)) assert.equal(n, 2, method + ": watertight");
+    if (method === "earcut") {
+      assert.equal(solid.cap.tris.length, 4, "two 2-tri end caps");
+      assert.equal(solid.cap.extraPts.length, 0);
+    }
+  }
 });
 
 test("exportSplit-style assembly: parts by method + remainderSolid produce N objects", () => {
