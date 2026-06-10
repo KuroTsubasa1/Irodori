@@ -182,7 +182,11 @@
     const P2T = global.poly2tri;
     const SU = global.THREE && global.THREE.ShapeUtils;
     if (useCDT && !(P2T && P2T.SweepContext)) throw new Error("poly2tri not loaded (CDT)");
-    if (!(SU && SU.triangulateShape)) throw new Error("THREE.ShapeUtils not loaded (Earcut)");
+    // earcut is needed by the earcut method, the CDT fallback, AND liepa's
+    // hole-bearing groups — but a pure liepa run may never touch it, so the
+    // guard lives where it's used rather than up front.
+    const needSU = () => { if (!(SU && SU.triangulateShape)) throw new Error("THREE.ShapeUtils not loaded (Earcut)"); };
+    if (!isLiepa) needSU();
     if (isLiepa && !(global.Liepa && global.Liepa.fillLoop)) throw new Error("Liepa module not loaded");
 
     // each loop -> its own best-fit plane (a concatenated-loops plane is unsound:
@@ -237,6 +241,7 @@
     // fallback, AND liepa's hole-bearing groups). THREE.ShapeUtils returns
     // index triples into the concatenated [contour, ...holes] point list.
     const emitEarcut = (outer, holes) => {
+      needSU();
       const V2 = (p) => (global.THREE.Vector2 ? new global.THREE.Vector2(p[0], p[1]) : { x: p[0], y: p[1] });
       const contour = outer.poly2.map(V2);
       const holeContours = holes.map((h) => h.poly2.map(V2));

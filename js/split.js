@@ -167,7 +167,7 @@
         if (x >= cap.verts.length || y >= cap.verts.length) continue; // extras: never rim
         const u = cap.verts[x], v = cap.verts[y];
         const sd = surfDir.get(ek(u, v));
-        if (!sd) continue; // a diagonal between rim vids, not a rim edge
+        if (!sd) continue; // not a boundary edge (e.g. a cap diagonal between rim vids)
         if (sd === u + ">" + v) agree.set(root, (agree.get(root) || 0) + 1);
         else oppose.set(root, (oppose.get(root) || 0) + 1);
       }
