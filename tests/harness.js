@@ -104,4 +104,21 @@ function makeMirrorPair() {
   };
 }
 
-module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair };
+// An open square tube (cuboid sides, no top/bottom): 8 verts, 8 triangles,
+// two square rims (z=0 and z=2). All faces solid state 1. Its open boundary
+// is exactly the two rims — the minimal "band region" shape.
+function makeOpenTube() {
+  return {
+    nf: 8,
+    positions: new Float32Array([
+      0, 0, 0, 2, 0, 0, 2, 2, 0, 0, 2, 0,   // bottom rim 0..3
+      0, 0, 2, 2, 0, 2, 2, 2, 2, 0, 2, 2,   // top rim 4..7
+    ]),
+    v1: Int32Array.from([0, 0, 1, 1, 2, 2, 3, 3]),
+    v2: Int32Array.from([1, 5, 2, 6, 3, 7, 0, 4]),
+    v3: Int32Array.from([5, 4, 6, 5, 7, 6, 4, 7]),
+    paints: ["4", "4", "4", "4", "4", "4", "4", "4"],
+  };
+}
+
+module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube };

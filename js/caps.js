@@ -173,24 +173,20 @@
       return { verts, extraPts, tris };
     }
 
-    // --- earcut / cdt: project all loops to one plane, classify outer+holes ---
-    const allPts3 = [];
-    for (const loop of loops) for (const v of loop) allPts3.push(getPt(v));
-    const pl = bestFitPlane(allPts3);
-    // each loop -> { vids, poly2 (CCW-normalised), area, centroid2, d }
+    // --- earcut / cdt: per-loop planes; classify outer+holes in the outer's own frame ---
+    // each loop -> its own best-fit plane (a concatenated-loops plane is unsound:
+    // opposite-winding rims cancel Newell's normal), own-plane CCW projection, area,
+    // and 3-D centroid (for classification in another loop's frame)
     const L = loops.map((loop) => {
       const pts3 = loop.map(getPt);
-      let poly2 = pts3.map((p) => project(pl, p));
+      const lpl = bestFitPlane(pts3);
+      let poly2 = pts3.map((p) => project(lpl, p));
       let vids = loop.slice();
       if (signedArea2(poly2) < 0) { poly2 = poly2.slice().reverse(); vids = vids.slice().reverse(); }
-      let cx = 0, cy = 0;
-      for (const p of poly2) { cx += p[0]; cy += p[1]; }
-      // mean offset along the plane normal — used to reject far-apart loops
-      // (stacked tube end-rings) from being grouped as outer + hole.
-      let d = 0;
-      for (const p of pts3) d += (p[0] - pl.ox) * pl.nx + (p[1] - pl.oy) * pl.ny + (p[2] - pl.oz) * pl.nz;
-      d /= pts3.length;
-      return { vids, poly2, area: Math.abs(signedArea2(poly2)), centroid2: [cx / poly2.length, cy / poly2.length], d };
+      const c3 = [0, 0, 0];
+      for (const p of pts3) { c3[0] += p[0]; c3[1] += p[1]; c3[2] += p[2]; }
+      c3[0] /= pts3.length; c3[1] /= pts3.length; c3[2] /= pts3.length;
+      return { vids, pts3, pl: lpl, poly2, area: Math.abs(signedArea2(poly2)), c3 };
     });
     // group: largest-area loop is the outer; loops whose centroid lies inside it
     // are holes; any loop not inside becomes its own independent outer (no holes).
@@ -219,8 +215,9 @@
       const holes = [];
       for (const hi of order) {
         if (used.has(hi)) continue;
-        if (inPoly(L[hi].centroid2, L[oi].poly2) &&
-            Math.abs(L[hi].d - L[oi].d) <= COPLANAR_FRAC * Math.sqrt(L[oi].area)) {
+        const O = L[oi], H = L[hi];
+        const offN = Math.abs((H.c3[0] - O.pl.ox) * O.pl.nx + (H.c3[1] - O.pl.oy) * O.pl.ny + (H.c3[2] - O.pl.oz) * O.pl.nz);
+        if (inPoly(project(O.pl, H.c3), O.poly2) && offN <= COPLANAR_FRAC * Math.sqrt(O.area)) {
           holes.push(hi); used.add(hi);
         }
       }
@@ -248,7 +245,10 @@
     };
 
     for (const grp of groups) {
-      const outer = L[grp.outer], holes = grp.holes.map((i) => L[i]);
+      const outer = L[grp.outer];
+      // holes re-projected into the OUTER's plane (their own poly2 is in their own frame);
+      // earcut/poly2tri normalize hole winding internally, so vid order stays as-is
+      const holes = grp.holes.map((i) => ({ vids: L[i].vids, poly2: L[i].pts3.map((p) => project(outer.pl, p)) }));
       const before = tris.length;
       if (!useCDT) {
         emitEarcut(outer, holes);

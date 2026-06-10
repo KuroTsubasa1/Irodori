@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { loadModules, makeTetra, edgeUseCounts, makeTJunction } = require("./harness");
+const { loadModules, makeTetra, edgeUseCounts, makeTJunction, makeOpenTube } = require("./harness");
 
 function regionOfState(Cleanup, mesh, state) {
   const g = Cleanup.buildSubGraph(mesh);
@@ -103,6 +103,18 @@ test("remainderSolid: reversed cap winding is opposite the part cap", () => {
   // directed cap edges in the part and remainder must be opposite -> together
   // every directed edge appears once (orientable closed surface when merged).
   assert.ok(rem.triState.length > 0);
+});
+
+test("solidFromSubs caps an open tube with two independent end caps", () => {
+  const { Cleanup, Split } = loadModules();
+  const tube = makeOpenTube();
+  const g = Cleanup.buildSubGraph(tube);
+  const solid = Split.solidFromSubs(tube, [...Array(g.NS).keys()], "earcut");
+  // watertight: an annulus would also be watertight but with 8 cap tris;
+  // the old drop-one-loop failure is 4 tris + 1 extraPt and NOT watertight.
+  for (const [, n] of edgeUseCounts(solid.indices)) assert.equal(n, 2, "watertight");
+  assert.equal(solid.cap.tris.length, 4, "two 2-tri end caps");
+  assert.equal(solid.cap.extraPts.length, 0, "no fallback fan");
 });
 
 test("exportSplit-style assembly: parts by method + remainderSolid produce N objects", () => {
