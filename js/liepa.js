@@ -106,21 +106,30 @@
   /* Liepa refinement: split triangles whose centroid is far (vs the local
    * scale sigma) from all corners, then relax INTERIOR edges by the
    * empty-circumsphere test. Mutates extraPts/tris in place. P = rim points
-   * (frozen); vertex i >= n reads extraPts[i - n]. */
-  function refine(P, n, extraPts, tris) {
+   * (frozen); vertex i >= n reads extraPts[i - n].
+   *
+   * sigmaFloor/maxTris bound the density: fractal paint rims have edge scales
+   * ~100x smaller than the opening, so targeting raw rim density would demand
+   * millions of triangles (real-data finding). The floor is the edge length
+   * that tiles the cap's own area in <= maxTris equilateral triangles. */
+  function refine(P, n, extraPts, tris, sigmaFloor, maxTris) {
     const pos = (i) => (i < n ? P[i] : extraPts[i - n]);
-    // sigma: rim verts = mean of their two rim edge lengths; inserted = corner mean
+    sigmaFloor = sigmaFloor || 0;
+    maxTris = maxTris || 3000;
+    // sigma: rim verts = mean of their two rim edge lengths (floored); inserted = corner mean
     const sigma = new Map();
     for (let i = 0; i < n; i++) {
-      sigma.set(i, (dist(P[i], P[(i + 1) % n]) + dist(P[i], P[(i - 1 + n) % n])) / 2);
+      const local = (dist(P[i], P[(i + 1) % n]) + dist(P[i], P[(i - 1 + n) % n])) / 2;
+      sigma.set(i, Math.max(local, sigmaFloor));
     }
     const isRimEdge = (u, v) => u < n && v < n && ((v - u + n) % n === 1 || (u - v + n) % n === 1);
     const SQRT2 = Math.SQRT2;
 
     for (let pass = 0; pass < 10; pass++) {
-      // --- split pass ---
+      // --- split pass (snapshot the length: children are reconsidered next pass) ---
       let split = 0;
-      for (let t = 0; t < tris.length; t++) {
+      const end = tris.length;
+      for (let t = 0; t < end && tris.length < maxTris; t++) {
         const [a, b, c] = tris[t];
         const pa = pos(a), pb = pos(b), pc = pos(c);
         const m = [(pa[0] + pb[0] + pc[0]) / 3, (pa[1] + pb[1] + pc[1]) / 3, (pa[2] + pb[2] + pc[2]) / 3];
@@ -132,37 +141,44 @@
         if (!ok) continue;
         const mi = n + extraPts.length;
         extraPts.push(m);
-        sigma.set(mi, sm);
+        sigma.set(mi, Math.max(sm, sigmaFloor));
         tris[t] = [a, b, mi];
         tris.push([b, c, mi], [c, a, mi]);
         split++;
       }
-      // --- flip relaxation (interior edges only) ---
-      let flipped = 0, guard = 0;
-      let changed = true;
-      while (changed && guard++ < 5) {
-        changed = false;
+      // --- flip relaxation (interior edges only): sweeps over a per-sweep edge
+      // map with a staleness guard, so one map build serves many flips ---
+      let flipped = 0;
+      const ek = (u, v) => (u < v ? u + "_" + v : v + "_" + u);
+      for (let sweep = 0; sweep < 5; sweep++) {
         const edgeTris = new Map(); // "u_v" (sorted) -> [triIndex...]
-        const ek = (u, v) => (u < v ? u + "_" + v : v + "_" + u);
         tris.forEach((t, ti) => { for (const [u, v] of [[t[0], t[1]], [t[1], t[2]], [t[2], t[0]]]) { const k = ek(u, v); let a = edgeTris.get(k); if (!a) edgeTris.set(k, (a = [])); a.push(ti); } });
+        const liveEdges = new Set(edgeTris.keys());
+        let sweepFlips = 0;
         for (const [k, owners] of edgeTris) {
           if (owners.length !== 2) continue;
           const [u, v] = k.split("_").map(Number);
           if (isRimEdge(u, v)) continue;
           const [t1, t2] = owners;
+          // staleness guard: an earlier flip this sweep may have retired this edge
+          const has = (tri) => tri.includes(u) && tri.includes(v);
+          if (!has(tris[t1]) || !has(tris[t2])) continue;
           const o1 = tris[t1].find((x) => x !== u && x !== v);
           const o2 = tris[t2].find((x) => x !== u && x !== v);
           if (o1 === undefined || o2 === undefined || o1 === o2) continue;
           if (isRimEdge(o1, o2)) continue; // don't flip onto a rim edge
-          if (edgeTris.has(ek(o1, o2))) continue; // flip target edge already exists
+          if (liveEdges.has(ek(o1, o2))) continue; // flip target edge already exists
           const cs = circumsphere(pos(u), pos(v), pos(o1));
           if (!cs || dist(pos(o2), cs.cc) >= cs.r - 1e-9) continue;
           // flip (u,v) -> (o1,o2), keeping each new triangle's winding from its parent
           tris[t1] = [u, o2, o1];
           tris[t2] = [v, o1, o2];
-          flipped++; changed = true;
-          break; // rebuild edgeTris from scratch to avoid stale state
+          liveEdges.delete(k);
+          liveEdges.add(ek(o1, o2));
+          sweepFlips++;
         }
+        flipped += sweepFlips;
+        if (!sweepFlips) break;
       }
       if (!split && !flipped) break;
     }
@@ -211,7 +227,7 @@
    * refine=true, fair=true }. */
   function fillLoop(loop, getPt, opts) {
     opts = opts || {};
-    const maxCoarse = opts.maxCoarse || 200;
+    const maxCoarse = opts.maxCoarse || 120;
     const n = loop.length;
     if (n < 3) return { extraPts: [], tris: [] };
     const P = loop.map(getPt);
@@ -233,7 +249,16 @@
       for (const tri of stripTris) tris.push(tri.map((s) => stripIdx[s]));
     }
     const extraPts = [];
-    if (opts.refine !== false) refine(P, n, extraPts, tris);
+    if (opts.refine !== false) {
+      // density floor: the edge length that tiles this cap's own area in
+      // <= maxTris equilateral triangles (fractal rims would otherwise demand
+      // millions of triangles — see refine's doc comment)
+      const maxTris = opts.maxTris || 3000;
+      let capArea = 0;
+      for (const t of tris) capArea += triArea(P[t[0]], P[t[1]], P[t[2]]);
+      const sigmaFloor = Math.sqrt((4 * capArea) / (Math.sqrt(3) * maxTris));
+      refine(P, n, extraPts, tris, sigmaFloor, maxTris);
+    }
     if (opts.fair !== false) fair(P, n, extraPts, tris);
     return { extraPts, tris };
   }

@@ -102,3 +102,26 @@ test("fair smooths interior points, pins the rim, and obeys the maximum principl
     for (const p of smooth.extraPts) assert.ok(p[k] >= lo - 1e-6 && p[k] <= hi + 1e-6, "coord " + k + " inside rim range");
   }
 });
+
+test("fillLoop stays within budget on a fractal-scale rim (regression: density blow-up)", () => {
+  const { Liepa } = loadModules();
+  // a rim whose edge lengths are ~100x smaller than the opening (like fractal
+  // paint boundaries): the old rim-density target demanded millions of
+  // triangles here; the sigma floor must hold the budget instead.
+  const n = 1200;
+  const loop = [...Array(n).keys()];
+  const getPt = (i) => {
+    const a = (i / n) * Math.PI * 2;
+    const r = 10 + 0.15 * Math.sin(37 * a);
+    return [Math.cos(a) * r, Math.sin(a) * r, 0.4 * Math.sin(5 * a)];
+  };
+  const t0 = Date.now();
+  const cap = Liepa.fillLoop(loop, getPt); // default opts — the production path
+  const ms = Date.now() - t0;
+  assert.ok(ms < 5000, "completed in " + ms + "ms");
+  assert.ok(cap.tris.length <= 3000, "triangle budget held (" + cap.tris.length + ")");
+  assert.ok(cap.extraPts.length > 2, "real refinement, not a fallback fan (" + cap.extraPts.length + ")");
+  const cov = rimCoverage(n, cap.tris);
+  assert.equal(cov.rimOnce, n, "rim covered exactly once");
+  assert.equal(cov.internalWrong, 0, "interior edges paired");
+});

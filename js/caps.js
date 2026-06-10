@@ -191,6 +191,7 @@
             tris.push(t.map((r) => (r < loop.length ? idxOf(loop[r]) : base + (r - loop.length))));
           }
         } catch (e) {
+          console.warn("liepa fill failed for a loop; centroid fallback:", e && e.message);
           while (tris.length > before) tris.pop();
           emitCentroidFan(loop);
         }
