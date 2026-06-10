@@ -167,7 +167,87 @@
       return { verts, extraPts, tris };
     }
 
-    throw new Error("Unknown cap method: " + method);
+    // --- earcut / cdt: project all loops to one plane, classify outer+holes ---
+    const allPts3 = [];
+    for (const loop of loops) for (const v of loop) allPts3.push(getPt(v));
+    const pl = bestFitPlane(allPts3);
+    // each loop -> { vids, poly2 (CCW-normalised), area, centroid2 }
+    const L = loops.map((loop) => {
+      let poly2 = loop.map((v) => project(pl, getPt(v)));
+      let vids = loop.slice();
+      if (signedArea2(poly2) < 0) { poly2 = poly2.slice().reverse(); vids = vids.slice().reverse(); }
+      let cx = 0, cy = 0;
+      for (const p of poly2) { cx += p[0]; cy += p[1]; }
+      return { vids, poly2, area: Math.abs(signedArea2(poly2)), centroid2: [cx / poly2.length, cy / poly2.length] };
+    });
+    // group: largest-area loop is the outer; loops whose centroid lies inside it
+    // are holes; any loop not inside becomes its own independent outer (no holes).
+    const inPoly = (pt, poly) => {
+      let inside = false;
+      for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
+        const a = poly[i], b = poly[j];
+        if ((a[1] > pt[1]) !== (b[1] > pt[1]) &&
+            pt[0] < ((b[0] - a[0]) * (pt[1] - a[1])) / (b[1] - a[1] || 1e-12) + a[0]) inside = !inside;
+      }
+      return inside;
+    };
+    const order = L.map((_, i) => i).sort((a, b) => L[b].area - L[a].area);
+    const used = new Set();
+    const groups = []; // { outer:index, holes:index[] }
+    for (const oi of order) {
+      if (used.has(oi)) continue;
+      used.add(oi);
+      const holes = [];
+      for (const hi of order) {
+        if (used.has(hi)) continue;
+        if (inPoly(L[hi].centroid2, L[oi].poly2)) { holes.push(hi); used.add(hi); }
+      }
+      groups.push({ outer: oi, holes });
+    }
+
+    const useCDT = method === "cdt";
+    const P2T = global.poly2tri;
+    const SU = global.THREE && global.THREE.ShapeUtils;
+    if (useCDT && !(P2T && P2T.SweepContext)) throw new Error("poly2tri not loaded (CDT)");
+    if (!useCDT && !(SU && SU.triangulateShape)) throw new Error("THREE.ShapeUtils not loaded (Earcut)");
+
+    for (const g of groups) {
+      const outer = L[g.outer], holes = g.holes.map((i) => L[i]);
+      if (useCDT) {
+        // poly2tri throws on duplicate/coincident points — dedupe per loop.
+        const EPS = 1e-7;
+        const mkPts = (loopObj) => {
+          const ptsOut = [];
+          for (let k = 0; k < loopObj.poly2.length; k++) {
+            const p = loopObj.poly2[k], prev = ptsOut.length ? ptsOut[ptsOut.length - 1] : null;
+            if (prev && Math.abs(prev.x - p[0]) < EPS && Math.abs(prev.y - p[1]) < EPS) continue;
+            const pt = new P2T.Point(p[0], p[1]); pt._vid = loopObj.vids[k]; ptsOut.push(pt);
+          }
+          if (ptsOut.length > 1) {
+            const a = ptsOut[0], b = ptsOut[ptsOut.length - 1];
+            if (Math.abs(a.x - b.x) < EPS && Math.abs(a.y - b.y) < EPS) ptsOut.pop();
+          }
+          return ptsOut;
+        };
+        const ctx = new P2T.SweepContext(mkPts(outer));
+        for (const h of holes) ctx.addHole(mkPts(h));
+        ctx.triangulate();
+        for (const t of ctx.getTriangles()) {
+          tris.push([idxOf(t.getPoint(0)._vid), idxOf(t.getPoint(1)._vid), idxOf(t.getPoint(2)._vid)]);
+        }
+      } else {
+        // THREE.ShapeUtils.triangulateShape(contour, holes) -> index triples into
+        // the concatenated [contour, ...holes] point list; map back to vids.
+        const V2 = (p) => (global.THREE.Vector2 ? new global.THREE.Vector2(p[0], p[1]) : { x: p[0], y: p[1] });
+        const contour = outer.poly2.map(V2);
+        const holeContours = holes.map((h) => h.poly2.map(V2));
+        const flatVids = outer.vids.concat(...holes.map((h) => h.vids));
+        for (const [a, b, c] of SU.triangulateShape(contour, holeContours)) {
+          tris.push([idxOf(flatVids[a]), idxOf(flatVids[b]), idxOf(flatVids[c])]);
+        }
+      }
+    }
+    return { verts, extraPts, tris };
   }
 
   global.Caps = { extractLoops, bestFitPlane, project, triangulateLoops };

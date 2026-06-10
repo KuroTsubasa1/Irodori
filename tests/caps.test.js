@@ -85,3 +85,35 @@ test("projected: concave L-pentagon triangulates without self-overlap", () => {
   assert.deepEqual([...capBoundaryEdges(cap.tris)].sort(),
     [...loopEdgeSet(cap, [0, 1, 2, 3, 4, 5])].sort());
 });
+
+test("earcut: square outer + square hole -> 8 tris, fills outer minus hole", () => {
+  const { Caps } = loadModules();
+  const coords = {
+    0: [0, 0, 0], 1: [6, 0, 0], 2: [6, 6, 0], 3: [0, 6, 0],   // outer (CCW)
+    4: [2, 2, 0], 5: [2, 4, 0], 6: [4, 4, 0], 7: [4, 2, 0],   // hole (CW)
+  };
+  const cap = Caps.triangulateLoops([[0, 1, 2, 3], [4, 5, 6, 7]], (v) => coords[v], "earcut");
+  assert.equal(cap.tris.length, 8, "8 triangles for square-with-square-hole");
+  assert.equal(cap.extraPts.length, 0, "earcut invents no points");
+  // boundary = outer 4 edges + hole 4 edges (each used once)
+  assert.equal(capBoundaryEdges(cap.tris).size, 8);
+});
+
+test("cdt: square outer + square hole -> triangulated with no invented points", () => {
+  const { Caps } = loadModules();
+  const coords = {
+    0: [0, 0, 0], 1: [6, 0, 0], 2: [6, 6, 0], 3: [0, 6, 0],
+    4: [2, 2, 0], 5: [2, 4, 0], 6: [4, 4, 0], 7: [4, 2, 0],
+  };
+  const cap = Caps.triangulateLoops([[0, 1, 2, 3], [4, 5, 6, 7]], (v) => coords[v], "cdt");
+  assert.ok(cap.tris.length >= 8, "at least 8 triangles");
+  assert.equal(cap.extraPts.length, 0, "cdt invents no points");
+  assert.equal(capBoundaryEdges(cap.tris).size, 8, "outer + hole boundary preserved");
+});
+
+test("earcut: single convex loop (no holes) still triangulates", () => {
+  const { Caps } = loadModules();
+  const coords = { 0: [0, 0, 0], 1: [4, 0, 0], 2: [4, 4, 0], 3: [0, 4, 0] };
+  const cap = Caps.triangulateLoops([[0, 1, 2, 3]], (v) => coords[v], "earcut");
+  assert.equal(cap.tris.length, 2);
+});
