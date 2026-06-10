@@ -72,11 +72,40 @@
     const ptOf = (q) => (q.vid !== undefined ? [P[q.vid * 3], P[q.vid * 3 + 1], P[q.vid * 3 + 2]] : sectPts.get(q.key));
 
     const chords = []; // { a, b, stAbove, stBelow } (section-point keys)
+
+    // Section-boundary edges can coincide with existing mesh edges (both
+    // endpoints ON the plane). Clipped triangles never see them, so tally them
+    // from whole-classified triangles: an ON-ON edge with surface on both
+    // sides is a section chord. (A fully on-plane triangle tallies as "above";
+    // accepted degenerate.)
+    const onEdges = new Map(); // "minVid_maxVid" -> { u, w, up, dn, stUp, stDn }
+    const triCentroidState = (vs2, code) => {
+      const tree = Paint.decode(code);
+      const a = vs2[0] * 3, b = vs2[1] * 3, c = vs2[2] * 3;
+      return Paint.stateAtPoint(
+        tree,
+        P[a], P[a + 1], P[a + 2], P[b], P[b + 1], P[b + 2], P[c], P[c + 1], P[c + 2],
+        (P[a] + P[b] + P[c]) / 3, (P[a + 1] + P[b + 1] + P[c + 1]) / 3, (P[a + 2] + P[b + 2] + P[c + 2]) / 3
+      );
+    };
+    const tallyOnEdges = (vs2, ds2, code, isAbove) => {
+      for (let i = 0; i < 3; i++) {
+        const j = (i + 1) % 3;
+        if (ds2[i] !== 0 || ds2[j] !== 0) continue;
+        const u = vs2[i], w = vs2[j];
+        const key = u < w ? u + "_" + w : w + "_" + u;
+        let e = onEdges.get(key);
+        if (!e) { e = { u, w, up: 0, dn: 0, stUp: 0, stDn: 0 }; onEdges.set(key, e); }
+        const st = triCentroidState(vs2, code);
+        if (isAbove) { e.up++; e.stUp = st; } else { e.dn++; e.stDn = st; }
+      }
+    };
+
     for (let f = 0; f < mesh.nf; f++) {
       const vs = [mesh.v1[f], mesh.v2[f], mesh.v3[f]];
       const ds = [D[vs[0]], D[vs[1]], D[vs[2]]];
-      if (ds[0] >= 0 && ds[1] >= 0 && ds[2] >= 0) { emitWhole(above, vs, mesh.paints[f]); continue; }
-      if (ds[0] <= 0 && ds[1] <= 0 && ds[2] <= 0) { emitWhole(below, vs, mesh.paints[f]); continue; }
+      if (ds[0] >= 0 && ds[1] >= 0 && ds[2] >= 0) { emitWhole(above, vs, mesh.paints[f]); tallyOnEdges(vs, ds, mesh.paints[f], true); continue; }
+      if (ds[0] <= 0 && ds[1] <= 0 && ds[2] <= 0) { emitWhole(below, vs, mesh.paints[f]); tallyOnEdges(vs, ds, mesh.paints[f], false); continue; }
       // mixed: walk the cycle building one polygon per side; plane points to both
       const pa = [], pb = [], plKeys = [];
       for (let i = 0; i < 3; i++) {
@@ -101,6 +130,10 @@
       if (pa.length >= 3) { stA = centroidState(pa); emitPoly(above, pa, solidCode(stA)); }
       if (pb.length >= 3) { stB = centroidState(pb); emitPoly(below, pb, solidCode(stB)); }
       if (plKeys.length === 2) chords.push({ a: plKeys[0], b: plKeys[1], stAbove: stA, stBelow: stB });
+    }
+
+    for (const e of onEdges.values()) {
+      if (e.up && e.dn) chords.push({ a: onKey(e.u), b: onKey(e.w), stAbove: e.stUp, stBelow: e.stDn });
     }
 
     // chain chords into closed section loops (degree-2 walk; pinch -> warn)

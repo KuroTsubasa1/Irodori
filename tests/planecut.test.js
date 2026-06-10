@@ -51,3 +51,28 @@ test("cutMesh: a plane that misses returns the source side untouched", () => {
   assert.equal(r.above, null);
   assert.ok(r.below && r.below.nf === 12, "below is the whole cube");
 });
+
+test("cutMesh: a tilted cut still yields watertight halves summing to the source volume", () => {
+  const { PlaneCut } = loadModules();
+  const s = Math.SQRT1_2;
+  const { above, below } = PlaneCut.cutMesh(makeClosedCube(), { px: 1, py: 1, pz: 1, nx: s, ny: 0, nz: s });
+  assert.ok(above && below);
+  let sum = 0;
+  for (const h of [above, below]) {
+    const I = asIndices(h);
+    assert.equal(directedViolations(I), 0, "directed-watertight");
+    sum += signedVolume(I, h.positions);
+  }
+  assert.ok(Math.abs(sum - 8) < 1e-6, "volumes sum to the cube (8), got " + sum.toFixed(4));
+});
+
+test("cutMesh: clipped pieces inherit the parent's paint at their centroid", () => {
+  const { PlaneCut } = loadModules();
+  const cube = makeClosedCube();
+  cube.paints[4] = "841"; // front face (0,1,5): child (A,B,M)->state 2, (M,D,A)->state 1
+  const { above, below } = PlaneCut.cutMesh(cube, { px: 0, py: 0, pz: 1, nx: 0, ny: 0, nz: 1 });
+  // (A,B,M) spans z in [0,1] -> its pieces land below as state 2 ("8")
+  assert.ok(below.paints.includes("8"), "below got a state-2 piece from the painted face");
+  assert.ok(above.paints.includes("4"), "above keeps state-1 geometry");
+  assert.ok(!above.paints.includes("841") || !below.paints.includes("841"), "the crossing face was actually clipped");
+});
