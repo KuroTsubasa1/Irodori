@@ -217,6 +217,17 @@
     return node;
   }
 
+  // Recursively merge subtrees whose leaves all share one state into a single
+  // leaf (post-order). Returns a (possibly new) tree; never mutates the input.
+  function collapseDeep(node) {
+    if (node.leaf) return node;
+    const kids = node.kids.map(collapseDeep);
+    if (kids.every((k) => k.leaf && k.state === kids[0].state)) {
+      return { leaf: true, state: kids[0].state };
+    }
+    return { leaf: false, special: node.special, split: node.split, kids };
+  }
+
   global.Paint = {
     decode,
     encode,
@@ -227,5 +238,6 @@
     tessellate,
     remapLeaves,
     collapseIfUniform,
+    collapseDeep,
   };
 })(window);

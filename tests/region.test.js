@@ -66,3 +66,16 @@ test("selectColorRegion honors an exclude set", () => {
   assert.equal(r.length, 2, "excluded sub is not flooded");
   assert.ok(![...r].includes(s1[1]));
 });
+
+test("collapseDeep merges uniform subtrees and keeps mixed ones", () => {
+  const { Paint } = loadModules();
+  const leaf = (s) => ({ leaf: true, state: s });
+  const uniform = { leaf: false, split: 3, special: 0, kids: [leaf(2), leaf(2), leaf(2), leaf(2)] };
+  const nested = { leaf: false, split: 1, special: 0, kids: [uniform, leaf(2)] };
+  const collapsed = Paint.collapseDeep(nested);
+  assert.ok(collapsed.leaf, "fully uniform tree becomes one leaf");
+  assert.equal(collapsed.state, 2);
+  const mixed = { leaf: false, split: 1, special: 0, kids: [leaf(1), leaf(2)] };
+  const kept = Paint.collapseDeep(mixed);
+  assert.ok(!kept.leaf, "mixed tree stays split");
+});
