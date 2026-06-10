@@ -55,6 +55,8 @@ body {
   background: linear-gradient(140deg, var(--accent-2), var(--accent-d)); border-color: transparent;
   color: #fff; box-shadow: 0 8px 16px -8px var(--accent);
 }
+.tool .kbd { font-family: inherit; font-size: 10.5px; line-height: 1; font-weight: 700; padding: 3px 5px; border-radius: 5px; background: var(--card-2); color: var(--muted); border: 1px solid var(--line); }
+.tool.active .kbd { background: rgba(255, 255, 255, 0.18); color: #fff; border-color: transparent; }
 
 .topactions { display: flex; gap: 8px; align-items: center; justify-self: end; }
 .icon { width: 40px; height: 40px; padding: 0; flex: 0 0 auto; display: grid; place-items: center; }
