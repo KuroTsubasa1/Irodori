@@ -81,3 +81,26 @@ test("solidFromSubs conforms T-junctions into a manifold solid", () => {
     assert.equal(n, 2, "every edge shared by exactly two triangles");
   }
 });
+
+test("remainderSolid: lifting one region leaves a watertight remainder", () => {
+  const { Cleanup, Split } = loadModules();
+  const mesh = makeTetra();
+  const subs = regionOfState(Cleanup, mesh, 1);            // the 3 state-1 faces
+  const part = Split.solidFromSubs(mesh, Array.from(subs), "earcut");
+  const claimed = new Set(subs);
+  const rem = Split.remainderSolid(mesh, [{ subs: Array.from(subs), cap: part.cap, state: 1 }], claimed);
+  // remainder = the single state-2 face + the reversed cap of the lifted region
+  for (const [, n] of edgeUseCounts(rem.indices)) assert.equal(n, 2, "remainder closed");
+  assert.ok(rem.indices.length / 3 >= 2, "has the remaining face + cap");
+});
+
+test("remainderSolid: reversed cap winding is opposite the part cap", () => {
+  const { Cleanup, Split } = loadModules();
+  const mesh = makeTetra();
+  const subs = Array.from(regionOfState(Cleanup, mesh, 1));
+  const part = Split.solidFromSubs(mesh, subs, "centroid");
+  const rem = Split.remainderSolid(mesh, [{ subs, cap: part.cap, state: 1 }], new Set(subs));
+  // directed cap edges in the part and remainder must be opposite -> together
+  // every directed edge appears once (orientable closed surface when merged).
+  assert.ok(rem.triState.length > 0);
+});

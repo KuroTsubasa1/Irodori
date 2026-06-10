@@ -145,6 +145,84 @@
     };
   }
 
+  // Build the remaining mesh (sub-triangles NOT in any part) as a watertight
+  // solid: its conformed surface + every part's cap, reversed, each coloured the
+  // loop's majority bordering color. parts: [{ subs, cap, state }]; claimed: Set.
+  function remainderSolid(mesh, parts, claimed) {
+    const g = Cleanup.buildSubGraph(mesh);
+    const rem = [];
+    for (let s = 0; s < g.NS; s++) if (!claimed.has(s)) rem.push(s);
+    // open (uncapped) conformed surface of the remainder; we add the parts' caps
+    const surf = openSurface(mesh, rem);
+    const px = surf.px, py = surf.py, pz = surf.pz;
+    const out = surf.F.slice(), outSt = surf.triSt.slice();
+    const lidG = surf.lid; // global vid -> local (creates from welded coords)
+
+    for (const part of parts) {
+      const cap = part.cap;
+      const capLocal = cap.verts.map((gid) => lidG(gid));
+      const extraBase = px.length;
+      for (const ep of cap.extraPts) { px.push(ep[0]); py.push(ep[1]); pz.push(ep[2]); }
+      const refLocal = (i) => (i < cap.verts.length ? capLocal[i] : extraBase + (i - cap.verts.length));
+      const col = majorityBorderColor(mesh, g, part);
+      for (const [a, b, c] of cap.tris) {
+        out.push(refLocal(a), refLocal(c), refLocal(b)); // reversed winding
+        outSt.push(col);
+      }
+    }
+    const positions = new Float32Array(px.length * 3);
+    for (let i = 0; i < px.length; i++) { positions[i * 3] = px[i]; positions[i * 3 + 1] = py[i]; positions[i * 3 + 2] = pz[i]; }
+    return { positions, indices: Uint32Array.from(out), triState: Int32Array.from(outSt) };
+  }
+
+  // Conformed open surface (no cap) for a set of subs. Returns growable local
+  // coord arrays, the surface triangles F (flat), per-tri state, and a global->
+  // local vertex mapper `lid` shared for appending caps.
+  function openSurface(mesh, subs) {
+    const g = Cleanup.buildSubGraph(mesh);
+    const { sv, vx, vy, vz, subLeaf, midOf } = g;
+    const remap = new Map(), px = [], py = [], pz = [];
+    const lid = (gid) => {
+      let id = remap.get(gid);
+      if (id === undefined) { id = px.length; remap.set(gid, id); px.push(vx[gid]); py.push(vy[gid]); pz.push(vz[gid]); }
+      return id;
+    };
+    const decompose = (u, v) => {
+      const m = midOf ? midOf(u, v) : -1;
+      return (m >= 0 && m !== u && m !== v) ? decompose(u, m).concat(decompose(m, v).slice(1)) : [u, v];
+    };
+    const F = [], triSt = [];
+    for (const s of subs) {
+      const a = sv[s * 3], b = sv[s * 3 + 1], c = sv[s * 3 + 2], st = subLeaf[s].state;
+      const poly = decompose(a, b).concat(decompose(b, c).slice(1), decompose(c, a).slice(1, -1));
+      if (poly.length === 3) { F.push(lid(poly[0]), lid(poly[1]), lid(poly[2])); triSt.push(st); }
+      else {
+        let gx = 0, gy = 0, gz = 0; for (const gid of poly) { gx += vx[gid]; gy += vy[gid]; gz += vz[gid]; }
+        const nP = poly.length, gL = px.length; px.push(gx / nP); py.push(gy / nP); pz.push(gz / nP);
+        for (let i = 0; i < nP; i++) { F.push(gL, lid(poly[i]), lid(poly[(i + 1) % nP])); triSt.push(st); }
+      }
+    }
+    return { px, py, pz, F, triSt, lid };
+  }
+
+  // Most common remainder state adjacent to the part's boundary (the part's subs'
+  // neighbouring sub-triangles that are NOT in the part). Falls back to the part's
+  // own state.
+  function majorityBorderColor(mesh, g, part) {
+    const inPart = new Set(part.subs);
+    const votes = new Map();
+    const { start, list, subLeaf } = g;
+    for (const s of part.subs) {
+      for (let e = start[s]; e < start[s + 1]; e++) {
+        const v = list[e];
+        if (!inPart.has(v)) votes.set(subLeaf[v].state, (votes.get(subLeaf[v].state) || 0) + 1);
+      }
+    }
+    let best = -1, col = part.state;
+    votes.forEach((n, st) => { if (n > best) { best = n; col = st; } });
+    return col;
+  }
+
   function uuid() {
     const h = "0123456789abcdef";
     let s = "";
@@ -242,5 +320,5 @@
     return { objectsModel, rootModel, modelSettings };
   }
 
-  global.Split = { solidFromSubs, buildSplitXML, uuid };
+  global.Split = { solidFromSubs, remainderSolid, buildSplitXML, uuid };
 })(window);
