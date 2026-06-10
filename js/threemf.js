@@ -157,7 +157,7 @@
 
   // Build a split .3mf: each split part + the painted remainder become separate
   // top-level objects, coincident at the original build transform.
-  // splitParts: [{ meshIndex, subs:Int32Array|number[], state }]
+  // splitParts: [{ meshIndex, subs:Int32Array|number[], state, method }]
   async function exportSplit(doc, splitParts) {
     const claimed = doc.meshes.map(() => new Set());
     for (const p of splitParts)
@@ -167,10 +167,14 @@
     const nameFor = (st) => "Filament " + extruderFor(st);
     const objects = [];
 
-    // split parts -> uniform-color solids, capped with each part's chosen method
-    for (const p of splitParts) {
+    // split parts -> uniform-color solids, capped with each part's chosen method.
+    // Caps are freshly computed and kept locally so the remainder reuses the
+    // CURRENT cap (never a stale one) without mutating the caller's splitParts.
+    const partCaps = [];
+    for (let pi = 0; pi < splitParts.length; pi++) {
+      const p = splitParts[pi];
       const g = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "earcut");
-      p.cap = p.cap || g.cap; // ensure the remainder can reuse this part's cap
+      partCaps[pi] = g.cap;
       objects.push({
         name: nameFor(p.state), extruder: extruderFor(p.state),
         positions: g.positions, indices: g.indices, triState: null,
@@ -178,9 +182,11 @@
     }
     // remaining per mesh -> painted, hole-capped solid (reuses parts' reversed caps)
     for (let mi = 0; mi < doc.meshes.length; mi++) {
-      const partsHere = splitParts
-        .filter((p) => p.meshIndex === mi)
-        .map((p) => ({ subs: Array.from(p.subs), cap: p.cap, state: p.state }));
+      const partsHere = [];
+      for (let pi = 0; pi < splitParts.length; pi++) {
+        const p = splitParts[pi];
+        if (p.meshIndex === mi) partsHere.push({ subs: Array.from(p.subs), cap: partCaps[pi], state: p.state });
+      }
       if (!partsHere.length && !claimed[mi].size) continue;
       const g = Split.remainderSolid(doc.meshes[mi], partsHere, claimed[mi]);
       if (!g.indices.length) continue;
