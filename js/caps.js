@@ -174,34 +174,17 @@
       return { verts, extraPts, tris };
     }
 
-    if (method === "liepa") {
-      // Liepa pipeline fills each loop independently (no outer+hole nesting;
-      // coplanar island holes should use earcut/cdt). Falls back to a centroid
-      // fan per loop on any failure, preserving the watertight guarantee.
-      const LP = global.Liepa;
-      if (!LP || !LP.fillLoop) throw new Error("Liepa module not loaded");
-      for (const loop of loops) {
-        if (loop.length < 3) continue;
-        const before = tris.length;
-        const extraBefore = extraPts.length;
-        try {
-          const fill = LP.fillLoop(loop, (v) => getPt(v));
-          const base = verts.length + extraPts.length; // current extra offset
-          for (const ep of fill.extraPts) extraPts.push(ep);
-          for (const t of fill.tris) {
-            tris.push(t.map((r) => (r < loop.length ? idxOf(loop[r]) : base + (r - loop.length))));
-          }
-        } catch (e) {
-          console.warn("liepa fill failed for a loop; centroid fallback:", e && e.message);
-          while (tris.length > before) tris.pop();
-          while (extraPts.length > extraBefore) extraPts.pop();
-          emitCentroidFan(loop);
-        }
-      }
-      return { verts, extraPts, tris };
-    }
+    // --- liepa / earcut / cdt: per-loop planes; classify outer+holes in the
+    // outer's own frame, then emit per group ---
+    const useCDT = method === "cdt";
+    const isLiepa = method === "liepa";
+    if (!useCDT && !isLiepa && method !== "earcut") throw new Error("Unknown cap method: " + method);
+    const P2T = global.poly2tri;
+    const SU = global.THREE && global.THREE.ShapeUtils;
+    if (useCDT && !(P2T && P2T.SweepContext)) throw new Error("poly2tri not loaded (CDT)");
+    if (!(SU && SU.triangulateShape)) throw new Error("THREE.ShapeUtils not loaded (Earcut)");
+    if (isLiepa && !(global.Liepa && global.Liepa.fillLoop)) throw new Error("Liepa module not loaded");
 
-    // --- earcut / cdt: per-loop planes; classify outer+holes in the outer's own frame ---
     // each loop -> its own best-fit plane (a concatenated-loops plane is unsound:
     // opposite-winding rims cancel Newell's normal), own-plane CCW projection, area,
     // and 3-D centroid (for classification in another loop's frame)
@@ -219,8 +202,6 @@
       c3[0] /= pts3.length; c3[1] /= pts3.length; c3[2] /= pts3.length;
       return { vids, pts3, pl: lpl, poly2, area: Math.abs(signedArea2(poly2)), c3 };
     });
-    // group: largest-area loop is the outer; loops whose centroid lies inside it
-    // are holes; any loop not inside becomes its own independent outer (no holes).
     const inPoly = (pt, poly) => {
       let inside = false;
       for (let i = 0, j = poly.length - 1; i < poly.length; j = i++) {
@@ -230,16 +211,13 @@
       }
       return inside;
     };
-    // One nesting level only: outer + its holes. A loop nested inside a hole (an
-    // "island") is treated as a sibling hole (documented limitation; deeper
-    // co-planar nesting is rare for paint-region cuts).
     // A loop only counts as a hole of an outer if it is near-coplanar with it;
     // loops far apart along the plane normal (a band's two end-rings, which
     // project on top of each other) are capped independently instead.
     const COPLANAR_FRAC = 0.25;
     const order = L.map((_, i) => i).sort((a, b) => L[b].area - L[a].area);
     const used = new Set();
-    const groups = []; // { outer:index, holes:index[] }
+    const groups = []; // { outer: index, holes: index[] }
     for (const oi of order) {
       if (used.has(oi)) continue;
       used.add(oi);
@@ -255,16 +233,9 @@
       groups.push({ outer: oi, holes });
     }
 
-    const useCDT = method === "cdt";
-    if (!useCDT && method !== "earcut") throw new Error("Unknown cap method: " + method);
-    const P2T = global.poly2tri;
-    const SU = global.THREE && global.THREE.ShapeUtils;
-    if (useCDT && !(P2T && P2T.SweepContext)) throw new Error("poly2tri not loaded (CDT)");
-    if (!(SU && SU.triangulateShape)) throw new Error("THREE.ShapeUtils not loaded (Earcut)");
-
-    // Emit ear-clipped triangles for one outer+holes group (robust; also the CDT
-    // fallback). THREE.ShapeUtils.triangulateShape returns index triples into the
-    // concatenated [contour, ...holes] point list; map back to vids.
+    // Emit ear-clipped triangles for one outer+holes group (earcut, the CDT
+    // fallback, AND liepa's hole-bearing groups). THREE.ShapeUtils returns
+    // index triples into the concatenated [contour, ...holes] point list.
     const emitEarcut = (outer, holes) => {
       const V2 = (p) => (global.THREE.Vector2 ? new global.THREE.Vector2(p[0], p[1]) : { x: p[0], y: p[1] });
       const contour = outer.poly2.map(V2);
@@ -281,7 +252,30 @@
       // earcut/poly2tri normalize hole winding internally, so vid order stays as-is
       const holes = grp.holes.map((i) => ({ vids: L[i].vids, poly2: L[i].pts3.map((p) => project(outer.pl, p)) }));
       const before = tris.length;
+      const extraBefore = extraPts.length;
+
+      if (isLiepa && holes.length === 0) {
+        // hole-less loop -> full Liepa pipeline; centroid fan on any failure
+        const loop = outer.vids;
+        if (loop.length < 3) continue;
+        try {
+          const fill = global.Liepa.fillLoop(loop, (v) => getPt(v));
+          const base = verts.length + extraPts.length;
+          for (const ep of fill.extraPts) extraPts.push(ep);
+          for (const t of fill.tris) {
+            tris.push(t.map((r) => (r < loop.length ? idxOf(loop[r]) : base + (r - loop.length))));
+          }
+        } catch (e) {
+          console.warn("liepa fill failed for a loop; centroid fallback:", e && e.message);
+          while (tris.length > before) tris.pop();
+          while (extraPts.length > extraBefore) extraPts.pop();
+          emitCentroidFan(loop);
+        }
+        continue;
+      }
+
       if (!useCDT) {
+        // earcut — also liepa's hole-bearing groups (nesting-aware fill)
         emitEarcut(outer, holes);
       } else {
         // CDT path: poly2tri throws on duplicate/coincident points -> dedupe per loop.

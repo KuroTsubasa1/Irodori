@@ -201,3 +201,21 @@ test("liepa method fills each loop independently with refined interior points", 
   assert.ok(cap.extraPts.length > 0, "refined interior points present");
   assert.equal(capBoundaryEdges(cap.tris).size, n, "rim covered exactly once");
 });
+
+test("liepa respects coplanar island holes via the nesting classifier", () => {
+  const { Caps } = loadModules();
+  const coords = {
+    0: [0, 0, 0], 1: [6, 0, 0], 2: [6, 6, 0], 3: [0, 6, 0],   // outer 6x6
+    4: [2, 2, 0], 5: [2, 4, 0], 6: [4, 4, 0], 7: [4, 2, 0],   // 2x2 island
+  };
+  const cap = Caps.triangulateLoops([[0, 1, 2, 3], [4, 5, 6, 7]], (v) => coords[v], "liepa");
+  const pt = (r) => (r < cap.verts.length ? coords[cap.verts[r]] : cap.extraPts[r - cap.verts.length]);
+  let area = 0;
+  for (const t of cap.tris) {
+    const a = pt(t[0]), b = pt(t[1]), c = pt(t[2]);
+    const ux = b[0] - a[0], uy = b[1] - a[1], vx = c[0] - a[0], vy = c[1] - a[1];
+    area += Math.abs(ux * vy - uy * vx) / 2;
+  }
+  assert.ok(Math.abs(area - 32) < 1e-6, "outer minus island (32), got " + area.toFixed(2));
+  assert.equal(capBoundaryEdges(cap.tris).size, 8, "both rims covered exactly once");
+});
