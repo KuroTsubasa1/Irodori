@@ -75,5 +75,100 @@
     return [dx * pl.ux + dy * pl.uy + dz * pl.uz, dx * pl.vx + dy * pl.vy + dz * pl.vz];
   }
 
-  global.Caps = { extractLoops, bestFitPlane, project };
+  // --- 2D helpers (operate on [x,y] arrays) -------------------------------
+  function signedArea2(poly) {
+    let a = 0;
+    for (let i = 0; i < poly.length; i++) {
+      const p = poly[i], q = poly[(i + 1) % poly.length];
+      a += p[0] * q[1] - q[0] * p[1];
+    }
+    return a / 2;
+  }
+  function cross2(o, a, b) {
+    return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0]);
+  }
+  function pointInTri(p, a, b, c) {
+    const d1 = cross2(a, b, p), d2 = cross2(b, c, p), d3 = cross2(c, a, p);
+    const neg = d1 < 0 || d2 < 0 || d3 < 0;
+    const pos = d1 > 0 || d2 > 0 || d3 > 0;
+    return !(neg && pos);
+  }
+
+  // Ear-clipping triangulation of a simple polygon (array of [x,y]).
+  // Returns triangles as triples of indices into `poly`. CCW-normalised.
+  function earClip2D(poly) {
+    const n = poly.length;
+    const V = [];
+    for (let i = 0; i < n; i++) V.push(i);
+    if (signedArea2(poly) < 0) V.reverse();
+    const tris = [];
+    let guard = 0;
+    while (V.length > 3 && guard++ < 10 * n) {
+      let clipped = false;
+      for (let i = 0; i < V.length; i++) {
+        const i0 = V[(i + V.length - 1) % V.length], i1 = V[i], i2 = V[(i + 1) % V.length];
+        const a = poly[i0], b = poly[i1], c = poly[i2];
+        if (cross2(a, b, c) <= 0) continue; // reflex / collinear
+        let ear = true;
+        for (const j of V) {
+          if (j === i0 || j === i1 || j === i2) continue;
+          if (pointInTri(poly[j], a, b, c)) { ear = false; break; }
+        }
+        if (!ear) continue;
+        tris.push([i0, i1, i2]);
+        V.splice(i, 1);
+        clipped = true;
+        break;
+      }
+      if (!clipped) break; // numerically stuck; bail with what we have
+    }
+    if (V.length === 3) tris.push([V[0], V[1], V[2]]);
+    return tris;
+  }
+
+  // Triangulate boundary loops with one of: centroid | projected | earcut | cdt.
+  // loops: array of vid-arrays. getPt(vid) -> [x,y,z]. Returns the cap descriptor
+  // { verts, extraPts, tris } (see file header). earcut/cdt are added in Task 5.
+  function triangulateLoops(loops, getPt, method) {
+    const verts = [];
+    const vIndex = new Map();
+    const idxOf = (vid) => {
+      let i = vIndex.get(vid);
+      if (i === undefined) { i = verts.length; vIndex.set(vid, i); verts.push(vid); }
+      return i;
+    };
+    for (const loop of loops) for (const v of loop) idxOf(v);
+    const extraPts = [];
+    const tris = [];
+
+    if (method === "centroid") {
+      for (const loop of loops) {
+        let cx = 0, cy = 0, cz = 0;
+        for (const v of loop) { const p = getPt(v); cx += p[0]; cy += p[1]; cz += p[2]; }
+        cx /= loop.length; cy /= loop.length; cz /= loop.length;
+        const cRef = verts.length + extraPts.length;
+        extraPts.push([cx, cy, cz]);
+        for (let i = 0; i < loop.length; i++) {
+          tris.push([cRef, idxOf(loop[i]), idxOf(loop[(i + 1) % loop.length])]);
+        }
+      }
+      return { verts, extraPts, tris };
+    }
+
+    if (method === "projected") {
+      for (const loop of loops) {
+        const pts3 = loop.map(getPt);
+        const pl = bestFitPlane(pts3);
+        const poly2 = pts3.map((p) => project(pl, p));
+        for (const [a, b, c] of earClip2D(poly2)) {
+          tris.push([idxOf(loop[a]), idxOf(loop[b]), idxOf(loop[c])]);
+        }
+      }
+      return { verts, extraPts, tris };
+    }
+
+    throw new Error("Unknown cap method: " + method);
+  }
+
+  global.Caps = { extractLoops, bestFitPlane, project, triangulateLoops };
 })(window);

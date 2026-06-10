@@ -74,4 +74,20 @@ function makeTJunction() {
   };
 }
 
-module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction };
+// Edges used by exactly one triangle (the open boundary of a triangle fan/cap).
+// tris: array of [a,b,c] index triples. Returns a Set of "min_max" strings.
+function capBoundaryEdges(tris) {
+  const m = new Map();
+  const key = (a, b) => (a < b ? a + "_" + b : b + "_" + a);
+  for (const [a, b, c] of tris) {
+    for (const [u, v] of [[a, b], [b, c], [c, a]]) {
+      const k = key(u, v);
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+  }
+  const once = new Set();
+  for (const [k, n] of m) if (n === 1) once.add(k);
+  return once;
+}
+
+module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges };
