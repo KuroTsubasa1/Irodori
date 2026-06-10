@@ -89,6 +89,30 @@ always-watertight guarantee, matching the earcut/cdt fallback pattern).
   loop stays well under ~200 ms on the reference ear-band rims (~2,200 fine
   vertices, decimated to 200).
 
+## Implementation outcome (real-data amendment)
+
+First contact with the reference ear band exposed a design flaw the synthetic
+tests missed: **fractal paint rims** have edge scales ~100× smaller than the
+opening, so "match the rim's density" demanded millions of cap triangles —
+Node OOM'd at 4 GB and the browser spent 222 s before the per-loop fallback
+silently emitted centroid fans. The shipped fix (commit `7fc050d`):
+
+- **σ floor + triangle budget**: `σ_floor` = the edge length that tiles the
+  cap's own area in ≤ `maxTris` (3,000) equilateral triangles; per-vertex σ is
+  floored by it, and splitting halts at the budget. Scale-free and bounded.
+- Split passes snapshot the triangle list (children reconsidered next pass,
+  ≤ 10 generations); flip relaxation runs as **sweeps** over a per-sweep edge
+  map with a staleness guard (the rebuild-per-flip approach is gone).
+- `maxCoarse` default 200 → **120** (visual difference vanishes after
+  refine+fair; DP cost drops ~4×).
+- The per-loop centroid fallback now **warns to the console** (no silent
+  degradation).
+
+Measured on the reference band (2,108- and 2,712-vertex rims): **1.55 s
+total**, 3,000 tris + real refined interior points per loop, watertight. A
+fractal-rim regression test (1,200 fine vertices, default options, < 5 s,
+budget held, rim covered exactly once) pins this.
+
 ## Testing
 
 - **Unit (`node --test`):**
