@@ -123,6 +123,9 @@ b { color: var(--text); font-weight: 650; }
 .filebtn:hover span { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 #fileInfo { margin-top: 11px; line-height: 1.55; }
 
+#objectsList { list-style: none; margin: 6px 0 0; padding: 0; }
+#objectsList .objrow { display: flex; align-items: center; gap: 11px; padding: 7px 6px; border-radius: 9px; cursor: pointer; transition: background .15s; }
+#objectsList .objrow:hover { background: var(--card-2); }
 #filamentList { list-style: none; margin: 6px 0 0; padding: 0; }
 #filamentList li { display: flex; align-items: center; gap: 11px; padding: 7px 6px; border-radius: 9px; transition: background .15s; }
 #filamentList li:hover { background: var(--card-2); }

@@ -25,6 +25,7 @@
   function clearSplitPreview() { if (previewCache) { Viewer.clearPreview(); previewCache = null; } }
   let splitParts = []; // [{ meshIndex, subs:Int32Array, state, method }]
   let splitSeq = 0; // stable id per split part (for animation carry-over)
+  let isolated = null; // { kind:"mesh", index } | { kind:"part", id } | null
   const claimedByMesh = () => {
     const sets = doc.meshes.map(() => new Set());
     for (const p of splitParts) for (const s of p.subs) sets[p.meshIndex].add(s);
@@ -136,6 +137,9 @@
       doc = await ThreeMF.load(await file.arrayBuffer());
       if (!doc.meshes.length) { toast("No mesh found in this .3mf", true); return; }
       splitParts = [];
+      isolated = null;
+      Viewer.setVisibleMeshes(null);
+      Viewer.setPartVisibility(null);
       for (const m of doc.meshes) Cleanup.computeDominant(m);
       computeModelSize();
       render(null);
@@ -145,6 +149,7 @@
       previewActive = false;
       buildFilamentUI();
       buildPalette();
+      buildObjects();
       setTool("orbit");
       updateStats();
       updateHist();
@@ -152,7 +157,7 @@
       $("fileInfo").innerHTML =
         "<b>" + file.name + "</b><br>" + nf.toLocaleString() + " faces · " +
         Viewer.subTriangleCount().toLocaleString() + " sub-triangles · " + doc.filaments.length + " filaments";
-      ["filamentCard", "cleanCard", "statsCard", "historyCard"].forEach((id) => ($(id).hidden = false));
+      ["objectsCard", "filamentCard", "cleanCard", "statsCard", "historyCard"].forEach((id) => ($(id).hidden = false));
       $("exportBtn").disabled = false;
       $("reframeBtn").hidden = false;
       $("bgToggle").hidden = false;
@@ -201,6 +206,54 @@
     pal.appendChild(add);
     if (doc.filaments.length) selectPaint(doc.filaments.length);
   }
+  function buildObjects() {
+    const ul = $("objectsList");
+    ul.innerHTML = "";
+    doc.meshes.forEach((m, i) => {
+      const li = document.createElement("li");
+      li.className = "objrow";
+      const nm = document.createElement("span"); nm.className = "fname"; nm.textContent = "Object " + (i + 1);
+      const ct = document.createElement("span"); ct.className = "fcount"; ct.textContent = m.nf.toLocaleString();
+      nm.addEventListener("click", () => isolate({ kind: "mesh", index: i }));
+      ct.addEventListener("click", () => isolate({ kind: "mesh", index: i }));
+      li.append(nm, ct);
+      ul.appendChild(li);
+    });
+    splitParts.forEach((p) => {
+      const li = document.createElement("li");
+      li.className = "objrow";
+      const sw = document.createElement("span"); sw.className = "swatch"; sw.style.background = stateColor(p.state);
+      const nm = document.createElement("span"); nm.className = "fname"; nm.textContent = colorName(p.state) + " part";
+      nm.addEventListener("click", () => isolate({ kind: "part", id: p.id }));
+      li.append(sw, nm);
+      ul.appendChild(li);
+    });
+    $("showAllBtn").hidden = !isolated;
+  }
+  function isolate(target) {
+    isolated = target;
+    if (target.kind === "mesh") {
+      Viewer.setVisibleMeshes(new Set([target.index]));
+      render(null);
+      Viewer.setPartVisibility(new Set()); // hide all parts
+      Viewer.frame();
+    } else { // part
+      Viewer.setVisibleMeshes(new Set()); // hide all main meshes
+      render(null);
+      Viewer.setPartVisibility(new Set([target.id]));
+      Viewer.frame(Viewer.partObject(target.id));
+    }
+    buildObjects();
+  }
+  function showAll() {
+    isolated = null;
+    Viewer.setVisibleMeshes(null);
+    render(null);
+    Viewer.setPartVisibility(null);
+    Viewer.frame();
+    buildObjects();
+  }
+
   function selectPaint(s) {
     paintState = s;
     document.querySelectorAll(".pal").forEach((p) => p.classList.toggle("sel", +p.dataset.state === s));
@@ -356,6 +409,7 @@
     splitParts.push({ id: splitSeq++, meshIndex: hit.meshIndex, subs, state: hit.state, method: $("capMethod").value });
     pushHistory("Split");
     render(null);
+    buildObjects();
     toast("Split " + subs.length.toLocaleString() + " sub-triangles into a new solid");
   }
   Viewer.onPick((hit) => {
@@ -515,6 +569,7 @@
   });
   $("reframeBtn").addEventListener("click", () => Viewer.frame());
   $("bgToggle").addEventListener("click", () => $("stage").classList.toggle("dark"));
+  $("showAllBtn").addEventListener("click", showAll);
 
   document.addEventListener("keydown", (e) => {
     if (!doc) return;
