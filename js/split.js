@@ -138,6 +138,8 @@
           const li = remap.get(gid);
           let nx = 0, ny = 0, nz = 0;
           if (li !== undefined) { nx = acc[li * 3]; ny = acc[li * 3 + 1]; nz = acc[li * 3 + 2]; }
+          // || 1: a cancelled (zero) accumulator leaves the vertex unoffset —
+          // a degenerate-symmetric rim falls back to local t=0 instead of NaN
           const L = Math.hypot(nx, ny, nz) || 1;
           offsetOf.set(gid, [vx[gid] - (nx / L) * thickness, vy[gid] - (ny / L) * thickness, vz[gid] - (nz / L) * thickness]);
         }
