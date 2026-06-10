@@ -149,7 +149,6 @@
       history = [{ state: snap(), label: "Loaded" }];
       histIndex = 0;
       previewActive = false;
-      buildFilamentUI();
       buildPalette();
       buildObjects();
       setTool("orbit");
@@ -171,21 +170,28 @@
     }
   }
 
-  function buildFilamentUI() {
+  // The clean-list shows every paintable colour (union of states present in the
+  // meshes and all palette filaments; count 0 when unpainted) and preserves the
+  // user's protect-toggles across rebuilds.
+  function refreshFilamentUI() {
     const fc = gatherStates();
     const list = $("filamentList");
+    const prev = {};
+    list.querySelectorAll("input[data-state]").forEach((cb) => (prev[cb.dataset.state] = cb.checked));
     list.innerHTML = "";
-    Object.keys(fc).map(Number).sort((a, b) => a - b).forEach((s) => {
+    const states = new Set(Object.keys(fc).map(Number));
+    for (let i = 1; i <= doc.filaments.length; i++) states.add(i);
+    [...states].sort((a, b) => a - b).forEach((s) => {
       const li = document.createElement("li");
       const cb = document.createElement("input");
-      cb.type = "checkbox"; cb.checked = true; cb.dataset.state = s;
+      cb.type = "checkbox"; cb.checked = prev[s] !== undefined ? prev[s] : true; cb.dataset.state = s;
       cb.addEventListener("change", clearPreview);
       const sw = document.createElement("span");
       sw.className = "swatch"; sw.style.background = stateColor(s);
       const nm = document.createElement("span");
       nm.className = "fname"; nm.textContent = colorName(s);
       const ct = document.createElement("span");
-      ct.className = "fcount"; ct.textContent = fc[s].toLocaleString();
+      ct.className = "fcount"; ct.textContent = (fc[s] || 0).toLocaleString();
       li.append(cb, sw, nm, ct);
       list.appendChild(li);
     });
@@ -474,6 +480,7 @@
 
   // ---------- auto-clean ----------
   function updateStats() {
+    refreshFilamentUI();
     const thr = getThreshold();
     const sizesAll = {};
     for (const m of doc.meshes) {
