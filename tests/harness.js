@@ -15,6 +15,7 @@ function loadModules() {
     "vendor/poly2tri.min.js",
     "js/paint.js",
     "js/cleanup.js",
+    "js/caps.js",
     "js/split.js",
   ]) {
     const code = fs.readFileSync(path.join(__dirname, "..", f), "utf8");
@@ -24,6 +25,7 @@ function loadModules() {
     Paint: sandbox.Paint,
     Cleanup: sandbox.Cleanup,
     Split: sandbox.Split,
+    Caps: sandbox.Caps,
     THREE: sandbox.THREE,
     poly2tri: sandbox.poly2tri,
     window: sandbox,
