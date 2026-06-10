@@ -186,17 +186,20 @@
 
   // ---------- palette / tools ----------
   function buildPalette() {
-    const fc = gatherStates();
     const pal = $("palette");
     pal.innerHTML = "";
-    const states = Object.keys(fc).map(Number).sort((a, b) => a - b);
-    states.forEach((s) => {
+    doc.filaments.forEach((f, i) => {
+      const s = i + 1; // filament index = paint state
       const d = document.createElement("div");
-      d.className = "pal"; d.dataset.state = s; d.style.background = stateColor(s); d.title = colorName(s);
+      d.className = "pal"; d.dataset.state = s; d.style.background = f.hex; d.title = "Filament " + s;
       d.addEventListener("click", () => selectPaint(s));
       pal.appendChild(d);
     });
-    if (states.length) selectPaint(states[states.length - 1]);
+    const add = document.createElement("div");
+    add.className = "pal add"; add.title = "Add a new color"; add.textContent = "+";
+    add.addEventListener("click", () => $("addColorInput").click());
+    pal.appendChild(add);
+    if (doc.filaments.length) selectPaint(doc.filaments.length);
   }
   function selectPaint(s) {
     paintState = s;
@@ -465,6 +468,14 @@
 
   // ---------- events ----------
   $("fileInput").addEventListener("change", (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); });
+  $("addColorInput").addEventListener("change", (e) => {
+    if (!doc) return;
+    const hex = e.target.value; // "#rrggbb"
+    doc.filaments.push({ index: doc.filaments.length + 1, hex });
+    buildPalette();
+    selectPaint(doc.filaments.length);
+    toast("Added color " + hex.toUpperCase());
+  });
   document.querySelectorAll("#toolbar .tool").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.tool)));
   document.querySelectorAll("#optionsbar [data-rot]").forEach((b) =>
     b.addEventListener("click", () => { const [ax, d] = b.dataset.rot.split(":"); doRotate({ x: 0, y: 1, z: 2 }[ax], +d); })

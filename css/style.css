@@ -83,6 +83,8 @@ body {
 .pal { width: 26px; height: 26px; border-radius: 8px; cursor: pointer; transition: .12s; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12); }
 .pal:hover { transform: translateY(-2px) scale(1.05); }
 .pal.sel { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--accent); }
+.pal.add { display: grid; place-items: center; background: transparent; box-shadow: inset 0 0 0 1.5px #c7cedb; color: var(--muted); font-size: 17px; font-weight: 700; line-height: 1; }
+.pal.add:hover { box-shadow: inset 0 0 0 1.5px var(--accent); color: var(--accent); transform: translateY(-2px); }
 
 /* ---------- main: workflow + stage ---------- */
 #main { flex: 1 1 auto; display: flex; min-height: 0; }
