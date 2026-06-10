@@ -1,7 +1,7 @@
 # Scene Tools (Batch C) — Design
 
 **Date:** 2026-06-10
-**Status:** Draft (awaiting user spec review)
+**Status:** Approved (ready for implementation plan)
 
 ## Summary
 
