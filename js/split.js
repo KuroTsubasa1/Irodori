@@ -323,5 +323,5 @@
     return { objectsModel, rootModel, modelSettings };
   }
 
-  global.Split = { solidFromSubs, remainderSolid, buildSplitXML, uuid };
+  global.Split = { solidFromSubs, remainderSolid, majorityBorderColor, buildSplitXML, uuid };
 })(window);

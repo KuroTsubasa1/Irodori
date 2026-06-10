@@ -321,14 +321,13 @@
     return c;
   }
 
-  const EXPLODE_K = 0.45;
+  const EXPLODE_K = 0.8;
 
   function clearSplitObjs() {
     for (const o of splitObjs) { root.remove(o.mesh); o.mesh.geometry.dispose(); o.mesh.material.dispose(); }
     splitObjs = [];
   }
 
-  const CAP_FILL = new THREE.Color("#9aa3b2").convertSRGBToLinear();
   function clearRemainderCaps() {
     for (const m of remainderCapObjs) { root.remove(m); m.geometry.dispose(); m.material.dispose(); }
     remainderCapObjs = [];
@@ -359,7 +358,9 @@
     gg.setAttribute("position", new THREE.BufferAttribute(pos, 3));
     gg.setIndex(new THREE.BufferAttribute(idx, 1));
     gg.computeVertexNormals();
-    const mat = new THREE.MeshStandardMaterial({ color: CAP_FILL.clone(), roughness: 0.85, metalness: 0.0, side: THREE.DoubleSide });
+    // fill the hole with the surrounding (majority bordering) color, matching the export
+    const fillCol = linColor(Split.majorityBorderColor(doc.meshes[part.meshIndex], g, part));
+    const mat = new THREE.MeshStandardMaterial({ color: fillCol.clone(), roughness: 0.85, metalness: 0.0, side: THREE.DoubleSide });
     return new THREE.Mesh(gg, mat);
   }
 
@@ -404,10 +405,10 @@
       });
       const mesh = new THREE.Mesh(gg, mat);
       const pc = gg.boundingSphere.center;
-      const dir = new THREE.Vector3().subVectors(pc, c);
-      if (dir.lengthSq() < 1e-9) dir.set(0, 0, 1);
-      dir.normalize();
-      const target = dir.multiplyScalar(r * EXPLODE_K);
+      // proportional exploded view: every pair of parts separates by ×(1+K),
+      // so adjacent parts get a real gap instead of staying glued together
+      const target = new THREE.Vector3().subVectors(pc, c).multiplyScalar(EXPLODE_K);
+      if (target.lengthSq() < 1e-9) target.set(0, 0, r * 0.15);
       root.add(mesh);
       const cur = prevById.get(p.id) || new THREE.Vector3();
       mesh.position.copy(cur);
