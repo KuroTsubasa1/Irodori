@@ -8,20 +8,29 @@ function regionOfState(Cleanup, mesh, state) {
   return Cleanup.selectColorRegion(mesh, seed);
 }
 
-test("solidFromSubs caps an open region into a watertight solid", () => {
+test("solidFromSubs caps an open region into a watertight solid (all methods)", () => {
+  const { Cleanup, Split } = loadModules();
+  for (const method of ["centroid", "projected", "earcut", "cdt"]) {
+    const mesh = makeTetra();
+    const subs = regionOfState(Cleanup, mesh, 1); // 3 open faces (a 'bowl')
+    const solid = Split.solidFromSubs(mesh, Array.from(subs), method);
+    // watertight: every undirected edge used exactly twice
+    for (const [, n] of edgeUseCounts(solid.indices)) assert.equal(n, 2, "closed under " + method);
+    assert.equal(solid.state, 1);
+    for (const s of solid.triState) assert.equal(s, 1, "uniform color under " + method);
+    // a reusable cap descriptor is returned
+    assert.ok(solid.cap && Array.isArray(solid.cap.verts) && Array.isArray(solid.cap.tris));
+    assert.equal(solid.cap.method, method);
+  }
+});
+
+test("solidFromSubs centroid cap of the tetra bowl: 6 tris, 5 verts", () => {
   const { Cleanup, Split } = loadModules();
   const mesh = makeTetra();
-  const subs = regionOfState(Cleanup, mesh, 1); // 3 open faces (a 'bowl')
-  const solid = Split.solidFromSubs(mesh, Array.from(subs));
-  // 3 patch triangles + 3 cap triangles
-  assert.equal(solid.indices.length / 3, 6);
-  // 4 used verts + 1 anchor
-  assert.equal(solid.positions.length / 3, 5);
-  // watertight: every undirected edge used exactly twice
-  for (const [, n] of edgeUseCounts(solid.indices)) assert.equal(n, 2);
-  // uniform color
-  assert.equal(solid.state, 1);
-  for (const s of solid.triState) assert.equal(s, 1);
+  const subs = regionOfState(Cleanup, mesh, 1);
+  const solid = Split.solidFromSubs(mesh, Array.from(subs), "centroid");
+  assert.equal(solid.indices.length / 3, 6);   // 3 patch + 3 cap
+  assert.equal(solid.positions.length / 3, 5);  // 4 verts + 1 centroid
 });
 
 test("solidFromSubs leaves an already-closed region uncapped", () => {

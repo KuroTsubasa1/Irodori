@@ -6,7 +6,8 @@
   // Build a capped watertight solid from leaf sub-triangle indices (indices into
   // the mesh's buildSubGraph enumeration).
   // Returns { positions:Float32Array, indices:Uint32Array, triState:Int32Array, state }.
-  function solidFromSubs(mesh, subs) {
+  function solidFromSubs(mesh, subs, method) {
+    method = method || "centroid";
     const g = Cleanup.buildSubGraph(mesh);
     const { sv, vx, vy, vz, subLeaf, midOf } = g;
 
@@ -22,8 +23,6 @@
       return id;
     };
 
-    // Decompose edge (global ids u..v) into the ordered list of global ids,
-    // splitting at any welded midpoint a neighbour introduced (T-junctions).
     function decompose(u, v) {
       const m = midOf ? midOf(u, v) : -1;
       if (m >= 0 && m !== u && m !== v) {
@@ -32,93 +31,103 @@
       return [u, v];
     }
 
-    const F = [], triSt = []; // local triangle indices + per-triangle state
+    const F = [], triSt = [];          // local surface triangles + per-tri state
+    const bEdge = new Map();           // global-edge key -> { u, v, count }
+    const ekeyG = (a, b) => (a < b ? a + "_" + b : b + "_" + a);
+    const addPerim = (u, v) => {
+      const k = ekeyG(u, v);
+      const e = bEdge.get(k);
+      if (e) e.count++;
+      else bEdge.set(k, { u, v, count: 1 }); // direction from first (owning) tri
+    };
+
     for (let k = 0; k < subs.length; k++) {
       const s = subs[k];
       const a = sv[s * 3], b = sv[s * 3 + 1], c = sv[s * 3 + 2];
       const st = subLeaf[s].state;
       const eab = decompose(a, b), ebc = decompose(b, c), eca = decompose(c, a);
-      // conformed boundary polygon (global ids), CCW like the original triangle
-      const poly = eab.concat(ebc.slice(1), eca.slice(1, -1));
+      const poly = eab.concat(ebc.slice(1), eca.slice(1, -1)); // conformed, CCW
+      // perimeter edges (global) for boundary detection
+      for (let i = 0; i < poly.length; i++) addPerim(poly[i], poly[(i + 1) % poly.length]);
       if (poly.length === 3) {
         F.push(lid(poly[0]), lid(poly[1]), lid(poly[2]));
         triSt.push(st);
       } else {
-        // fan from the polygon centroid (interior -> never collinear with an edge)
+        // fan from the polygon centroid (interior point; never collinear)
         let gx = 0, gy = 0, gz = 0;
         for (const gid of poly) { gx += vx[gid]; gy += vy[gid]; gz += vz[gid]; }
-        const n = poly.length;
-        const gLocal = px.length;
-        px.push(gx / n); py.push(gy / n); pz.push(gz / n);
-        for (let i = 0; i < n; i++) {
-          F.push(gLocal, lid(poly[i]), lid(poly[(i + 1) % n]));
+        const nP = poly.length, gLocal = px.length;
+        px.push(gx / nP); py.push(gy / nP); pz.push(gz / nP);
+        for (let i = 0; i < nP; i++) {
+          F.push(gLocal, lid(poly[i]), lid(poly[(i + 1) % nP]));
           triSt.push(st);
         }
       }
     }
-    const NV = px.length;
-    const nTri = F.length / 3;
-
-    // boundary detection on the conformed mesh; remember owning directed edge + tri
-    const ekey = (u, v) => (u < v ? u * NV + v : v * NV + u);
-    const eIdx = new Map();
-    const eCount = [], eA = [], eB = [], eTri = [];
-    const addEdge = (u, v, t) => {
-      const k = ekey(u, v);
-      let i = eIdx.get(k);
-      if (i === undefined) {
-        i = eCount.length; eIdx.set(k, i);
-        eCount.push(1); eA.push(u); eB.push(v); eTri.push(t);
-      } else eCount[i]++;
-    };
-    for (let t = 0; t < nTri; t++) {
-      addEdge(F[t * 3], F[t * 3 + 1], t);
-      addEdge(F[t * 3 + 1], F[t * 3 + 2], t);
-      addEdge(F[t * 3 + 2], F[t * 3], t);
-    }
 
     const out = [], outSt = [];
-    for (let t = 0; t < nTri; t++) {
-      out.push(F[t * 3], F[t * 3 + 1], F[t * 3 + 2]);
-      outSt.push(triSt[t]);
+    for (let t = 0; t < F.length; t += 3) { out.push(F[t], F[t + 1], F[t + 2]); outSt.push(triSt[t / 3]); }
+
+    // boundary edges (used once); rebuild directed adjacency by walking the cycle
+    // so that edges chain head-to-tail for extractLoops (bEdge stores first-seen
+    // direction which can be inconsistent across polygons).
+    const bndAdj = new Map();  // vertex -> [neighbor, ...]  (undirected)
+    for (const e of bEdge.values()) {
+      if (e.count !== 1) continue;
+      if (!bndAdj.has(e.u)) bndAdj.set(e.u, []);
+      if (!bndAdj.has(e.v)) bndAdj.set(e.v, []);
+      bndAdj.get(e.u).push(e.v);
+      bndAdj.get(e.v).push(e.u);
     }
-
-    const bnd = [];
-    for (let i = 0; i < eCount.length; i++) if (eCount[i] === 1) bnd.push(i);
-
-    let posCount = NV;
-    if (bnd.length) {
-      let ax = 0, ay = 0, az = 0;
-      for (let i = 0; i < NV; i++) { ax += px[i]; ay += py[i]; az += pz[i]; }
-      ax /= NV; ay /= NV; az /= NV;
-      const anchor = NV;
-      px.push(ax); py.push(ay); pz.push(az);
-      posCount = NV + 1;
-      for (const i of bnd) {
-        const u = eA[i], v = eB[i];
-        const ux = px[v] - px[u], uy = py[v] - py[u], uz = pz[v] - pz[u];
-        const wx = ax - px[u], wy = ay - py[u], wz = az - pz[u];
-        const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
-        const mx = (px[u] + px[v] + ax) / 3 - ax;
-        const my = (py[u] + py[v] + ay) / 3 - ay;
-        const mz = (pz[u] + pz[v] + az) / 3 - az;
-        if (nx * mx + ny * my + nz * mz >= 0) out.push(u, v, anchor);
-        else out.push(v, u, anchor);
-        outSt.push(triSt[eTri[i]]);
+    const boundary = [];
+    const bndVisited = new Set();
+    for (const start of bndAdj.keys()) {
+      if (bndVisited.has(start)) continue;
+      const loop = [start]; bndVisited.add(start);
+      let cur = start;
+      while (true) {
+        const next = (bndAdj.get(cur) || []).find(n => !bndVisited.has(n));
+        if (next === undefined) break;
+        bndVisited.add(next); loop.push(next); cur = next;
       }
+      if (loop.length >= 2) for (let i = 0; i < loop.length; i++) boundary.push([loop[i], loop[(i + 1) % loop.length]]);
     }
 
-    const positions = new Float32Array(posCount * 3);
-    for (let i = 0; i < posCount; i++) {
-      positions[i * 3] = px[i];
-      positions[i * 3 + 1] = py[i];
-      positions[i * 3 + 2] = pz[i];
+    let cap = { verts: [], extraPts: [], tris: [], method };
+    if (boundary.length) {
+      const loops = Caps.extractLoops(boundary);
+      const getPt = (gid) => [vx[gid], vy[gid], vz[gid]];
+      cap = Caps.triangulateLoops(loops, getPt, method);
+      cap.method = method;
+      // orient part-outward: flip if the loops' plane normal points toward the
+      // surface interior (so cap normals face away from the part centroid).
+      const loopPts = [];
+      for (const loop of loops) for (const v of loop) loopPts.push(getPt(v));
+      const pl = Caps.bestFitPlane(loopPts);
+      let sx = 0, sy = 0, sz = 0;                       // surface centroid (local verts)
+      for (let i = 0; i < px.length; i++) { sx += px[i]; sy += py[i]; sz += pz[i]; }
+      sx /= px.length; sy /= py.length; sz /= pz.length;
+      const dir = [pl.ox - sx, pl.oy - sy, pl.oz - sz];
+      if (pl.nx * dir[0] + pl.ny * dir[1] + pl.nz * dir[2] < 0) {
+        for (const t of cap.tris) { const tmp = t[1]; t[1] = t[2]; t[2] = tmp; }
+      }
+      // emit the cap into the part: loop verts weld via lid(); extras append locally
+      const capLocal = cap.verts.map((gid) => lid(gid));
+      const extraBase = px.length;
+      for (const ep of cap.extraPts) { px.push(ep[0]); py.push(ep[1]); pz.push(ep[2]); }
+      const refLocal = (i) => (i < cap.verts.length ? capLocal[i] : extraBase + (i - cap.verts.length));
+      const capState = subs.length ? subLeaf[subs[0]].state : 0;
+      for (const [a, b, c] of cap.tris) { out.push(refLocal(a), refLocal(b), refLocal(c)); outSt.push(capState); }
     }
+
+    const positions = new Float32Array(px.length * 3);
+    for (let i = 0; i < px.length; i++) { positions[i * 3] = px[i]; positions[i * 3 + 1] = py[i]; positions[i * 3 + 2] = pz[i]; }
     return {
       positions,
       indices: Uint32Array.from(out),
       triState: Int32Array.from(outSt),
       state: subs.length ? subLeaf[subs[0]].state : 0,
+      cap, // { verts:globalVids, extraPts, tris (part-outward), method }
     };
   }
 
