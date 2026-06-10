@@ -153,13 +153,16 @@
     const rem = [];
     for (let s = 0; s < g.NS; s++) if (!claimed.has(s)) rem.push(s);
     // open (uncapped) conformed surface of the remainder; we add the parts' caps
-    const surf = openSurface(mesh, rem);
+    const surf = openSurface(mesh, rem, g);
     const px = surf.px, py = surf.py, pz = surf.pz;
-    const out = surf.F.slice(), outSt = surf.triSt.slice();
+    const out = surf.F, outSt = surf.triSt;
     const lidG = surf.lid; // global vid -> local (creates from welded coords)
 
     for (const part of parts) {
       const cap = part.cap;
+      // cap.verts are global welded ids on the part boundary, which is also the
+      // remainder boundary, so lidG welds them onto existing remainder vertices
+      // (a coincident duplicate is only created for degenerate non-manifold input).
       const capLocal = cap.verts.map((gid) => lidG(gid));
       const extraBase = px.length;
       for (const ep of cap.extraPts) { px.push(ep[0]); py.push(ep[1]); pz.push(ep[2]); }
@@ -178,8 +181,8 @@
   // Conformed open surface (no cap) for a set of subs. Returns growable local
   // coord arrays, the surface triangles F (flat), per-tri state, and a global->
   // local vertex mapper `lid` shared for appending caps.
-  function openSurface(mesh, subs) {
-    const g = Cleanup.buildSubGraph(mesh);
+  function openSurface(mesh, subs, g) {
+    g = g || Cleanup.buildSubGraph(mesh);
     const { sv, vx, vy, vz, subLeaf, midOf } = g;
     const remap = new Map(), px = [], py = [], pz = [];
     const lid = (gid) => {
