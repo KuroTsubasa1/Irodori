@@ -371,7 +371,7 @@
       if (previewCache && previewCache.meshIndex === hit.meshIndex && previewCache.members.has(hit.localSub)) return;
       clearSplitPreview();
       const m = doc.meshes[hit.meshIndex];
-      const subs = Cleanup.selectColorRegion(m, hit.localSub);
+      const subs = Cleanup.selectColorRegion(m, hit.localSub, claimedByMesh()[hit.meshIndex]);
       const members = new Set(subs);
       const g = [];
       for (const s of subs) { const gi = Viewer.toGlobalSub(hit.meshIndex, s); if (gi >= 0) g.push(gi); }
@@ -406,7 +406,7 @@
     clearSplitPreview();
     const m = doc.meshes[hit.meshIndex];
     if (hit.localSub == null) return;
-    const subs = Cleanup.selectColorRegion(m, hit.localSub);
+    const subs = Cleanup.selectColorRegion(m, hit.localSub, claimedByMesh()[hit.meshIndex]);
     if (!subs.length) { toast("Nothing to split there", true); return; }
     splitParts.push({ id: splitSeq++, meshIndex: hit.meshIndex, subs, state: hit.state, method: $("capMethod").value });
     pushHistory("Split");

@@ -56,3 +56,13 @@ test("mirrorMap returns -1 where no mirror exists (asymmetric tetra)", () => {
   // tetra is not X-symmetric, so at least one sub has no partner
   assert.ok([...m].some((p) => p === -1));
 });
+
+test("selectColorRegion honors an exclude set", () => {
+  const { Cleanup } = loadModules();
+  const mesh = makeTetra();
+  const g = Cleanup.buildSubGraph(mesh);
+  const s1 = [...Array(g.NS).keys()].filter((i) => g.subLeaf[i].state === 1);
+  const r = Cleanup.selectColorRegion(mesh, s1[0], new Set([s1[1]]));
+  assert.equal(r.length, 2, "excluded sub is not flooded");
+  assert.ok(![...r].includes(s1[1]));
+});

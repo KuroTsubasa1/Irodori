@@ -479,10 +479,12 @@
 
   // Flood the connected same-color region containing seedSub. Returns the
   // member sub-triangle indices (Int32Array).
-  function selectColorRegion(mesh, seedSub) {
+  // Optional `exclude` Set: sub-triangle indices that are never flooded into.
+  function selectColorRegion(mesh, seedSub, exclude) {
     const g = buildSubGraph(mesh);
     const { start, list, subLeaf, NS } = g;
     if (seedSub < 0 || seedSub >= NS) return new Int32Array(0);
+    if (exclude && exclude.has(seedSub)) return new Int32Array(0);
     const st = subLeaf[seedSub].state;
     const seen = new Uint8Array(NS);
     const out = [];
@@ -493,7 +495,7 @@
       out.push(u);
       for (let e = start[u]; e < start[u + 1]; e++) {
         const v = list[e];
-        if (!seen[v] && subLeaf[v].state === st) {
+        if (!seen[v] && subLeaf[v].state === st && !(exclude && exclude.has(v))) {
           seen[v] = 1;
           stk.push(v);
         }
