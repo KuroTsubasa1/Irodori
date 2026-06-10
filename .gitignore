@@ -1,0 +1,8 @@
+# user working files and exports (keep tracked references in samples/)
+/*.3mf
+
+# verification artifacts
+*.jpeg
+.playwright-mcp/
+
+.DS_Store

@@ -1,0 +1,8 @@
+{
+  "name": "irodori",
+  "private": true,
+  "description": "Browser-only 3MF multi-color paint repair and split tool",
+  "scripts": {
+    "test": "node --test"
+  }
+}
