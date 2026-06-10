@@ -177,14 +177,20 @@
     const allPts3 = [];
     for (const loop of loops) for (const v of loop) allPts3.push(getPt(v));
     const pl = bestFitPlane(allPts3);
-    // each loop -> { vids, poly2 (CCW-normalised), area, centroid2 }
+    // each loop -> { vids, poly2 (CCW-normalised), area, centroid2, d }
     const L = loops.map((loop) => {
-      let poly2 = loop.map((v) => project(pl, getPt(v)));
+      const pts3 = loop.map(getPt);
+      let poly2 = pts3.map((p) => project(pl, p));
       let vids = loop.slice();
       if (signedArea2(poly2) < 0) { poly2 = poly2.slice().reverse(); vids = vids.slice().reverse(); }
       let cx = 0, cy = 0;
       for (const p of poly2) { cx += p[0]; cy += p[1]; }
-      return { vids, poly2, area: Math.abs(signedArea2(poly2)), centroid2: [cx / poly2.length, cy / poly2.length] };
+      // mean offset along the plane normal — used to reject far-apart loops
+      // (stacked tube end-rings) from being grouped as outer + hole.
+      let d = 0;
+      for (const p of pts3) d += (p[0] - pl.ox) * pl.nx + (p[1] - pl.oy) * pl.ny + (p[2] - pl.oz) * pl.nz;
+      d /= pts3.length;
+      return { vids, poly2, area: Math.abs(signedArea2(poly2)), centroid2: [cx / poly2.length, cy / poly2.length], d };
     });
     // group: largest-area loop is the outer; loops whose centroid lies inside it
     // are holes; any loop not inside becomes its own independent outer (no holes).
@@ -200,6 +206,10 @@
     // One nesting level only: outer + its holes. A loop nested inside a hole (an
     // "island") is treated as a sibling hole (documented limitation; deeper
     // co-planar nesting is rare for paint-region cuts).
+    // A loop only counts as a hole of an outer if it is near-coplanar with it;
+    // loops far apart along the plane normal (a band's two end-rings, which
+    // project on top of each other) are capped independently instead.
+    const COPLANAR_FRAC = 0.25;
     const order = L.map((_, i) => i).sort((a, b) => L[b].area - L[a].area);
     const used = new Set();
     const groups = []; // { outer:index, holes:index[] }
@@ -209,7 +219,10 @@
       const holes = [];
       for (const hi of order) {
         if (used.has(hi)) continue;
-        if (inPoly(L[hi].centroid2, L[oi].poly2)) { holes.push(hi); used.add(hi); }
+        if (inPoly(L[hi].centroid2, L[oi].poly2) &&
+            Math.abs(L[hi].d - L[oi].d) <= COPLANAR_FRAC * Math.sqrt(L[oi].area)) {
+          holes.push(hi); used.add(hi);
+        }
       }
       groups.push({ outer: oi, holes });
     }

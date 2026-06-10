@@ -146,3 +146,21 @@ test("earcut/cdt: a degenerate (collinear) loop still caps via centroid fallback
     assert.equal(capBoundaryEdges(cap.tris).size, 4, method + " cap covers the loop boundary");
   }
 });
+
+test("stacked end-loops are capped independently (not as outer+hole)", () => {
+  const { Caps } = loadModules();
+  const coords = {
+    0: [0, 0, 0], 1: [4, 0, 0], 2: [4, 4, 0], 3: [0, 4, 0],   // bottom rim (z=0)
+    4: [0, 0, 5], 5: [4, 0, 5], 6: [4, 4, 5], 7: [0, 4, 5],   // top rim (z=5)
+  };
+  for (const method of ["earcut", "cdt"]) {
+    const cap = Caps.triangulateLoops([[0, 1, 2, 3], [4, 5, 6, 7]], (v) => coords[v], method);
+    assert.equal(cap.extraPts.length, 0, method + ": no fallback fan");
+    assert.equal(cap.tris.length, 4, method + ": two 2-tri caps");
+    for (const t of cap.tris) {
+      const sides = new Set(t.map((r) => (cap.verts[r] <= 3 ? "A" : "B")));
+      assert.equal(sides.size, 1, method + ": no cross-loop triangles");
+    }
+    assert.equal(capBoundaryEdges(cap.tris).size, 8, method + ": both rims capped exactly once");
+  }
+});
