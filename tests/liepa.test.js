@@ -82,3 +82,23 @@ test("refine inserts interior points and preserves rim coverage", () => {
   assert.equal(cov.rimWrong, 0);
   assert.equal(cov.internalWrong, 0, "interior edges still paired after splits+flips");
 });
+
+test("fair smooths interior points, pins the rim, and obeys the maximum principle", () => {
+  const { Liepa } = loadModules();
+  const n = 60;
+  const loop = [...Array(n).keys()];
+  const getPt = (i) => { const a = (i / n) * Math.PI * 2; return [Math.cos(a) * 10, Math.sin(a) * 10, Math.sin(2 * a) * 2]; }; // saddle rim
+  const rough = Liepa.fillLoop(loop, getPt, { maxCoarse: 16, refine: true, fair: false });
+  const smooth = Liepa.fillLoop(loop, getPt, { maxCoarse: 16, refine: true, fair: true });
+  assert.equal(rough.extraPts.length, smooth.extraPts.length, "same topology");
+  assert.ok(rough.extraPts.length > 0);
+  let moved = 0;
+  for (let i = 0; i < rough.extraPts.length; i++) if (rough.extraPts[i].some((v, k) => Math.abs(v - smooth.extraPts[i][k]) > 1e-9)) moved++;
+  assert.ok(moved > 0, "fairing moved interior points");
+  // maximum principle per coordinate: faired interior stays inside the rim's bounds
+  for (let k = 0; k < 3; k++) {
+    let lo = Infinity, hi = -Infinity;
+    for (let i = 0; i < n; i++) { const v = getPt(i)[k]; if (v < lo) lo = v; if (v > hi) hi = v; }
+    for (const p of smooth.extraPts) assert.ok(p[k] >= lo - 1e-6 && p[k] <= hi + 1e-6, "coord " + k + " inside rim range");
+  }
+});

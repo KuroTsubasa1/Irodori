@@ -168,7 +168,42 @@
     }
   }
 
-  function fair(P, n, extraPts, tris) {}   // Task 4
+  /* Membrane fairing: Jacobi umbrella iterations on the interior points (the
+   * rim is pinned), lambda 0.5, until max displacement < 1e-3 x mean rim edge
+   * or 300 iterations. Converges to the harmonic ("soap film") patch. */
+  function fair(P, n, extraPts, tris) {
+    const nx = extraPts.length;
+    if (!nx) return;
+    const pos = (i) => (i < n ? P[i] : extraPts[i - n]);
+    const nbrs = new Array(nx).fill(null).map(() => new Set());
+    for (const [a, b, c] of tris) {
+      for (const [u, v] of [[a, b], [b, c], [c, a]]) {
+        if (u >= n) nbrs[u - n].add(v);
+        if (v >= n) nbrs[v - n].add(u);
+      }
+    }
+    let meanRim = 0;
+    for (let i = 0; i < n; i++) meanRim += dist(P[i], P[(i + 1) % n]);
+    meanRim /= n;
+    const stop = 1e-3 * meanRim;
+    const LAMBDA = 0.5;
+    for (let it = 0; it < 300; it++) {
+      let maxMove = 0;
+      const next = new Array(nx);
+      for (let i = 0; i < nx; i++) {
+        const cur = extraPts[i];
+        let mx = 0, my = 0, mz = 0, c = 0;
+        for (const v of nbrs[i]) { const p = pos(v); mx += p[0]; my += p[1]; mz += p[2]; c++; }
+        if (!c) { next[i] = cur; continue; }
+        mx /= c; my /= c; mz /= c;
+        const np = [cur[0] + LAMBDA * (mx - cur[0]), cur[1] + LAMBDA * (my - cur[1]), cur[2] + LAMBDA * (mz - cur[2])];
+        maxMove = Math.max(maxMove, dist(np, cur));
+        next[i] = np;
+      }
+      for (let i = 0; i < nx; i++) extraPts[i] = next[i];
+      if (maxMove < stop) break;
+    }
+  }
 
   /* Fill one boundary loop: decimate -> DP cap on the coarse polygon -> DP on
    * each fine strip -> (Task 3) refine -> (Task 4) fair. Returns
