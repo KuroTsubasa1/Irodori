@@ -41,5 +41,39 @@
     return loops;
   }
 
-  global.Caps = { extractLoops };
+  // Best-fit plane through pts (Newell's method — robust for non-planar loops).
+  // Returns origin o, unit normal n, and an in-plane orthonormal basis (u, v).
+  function bestFitPlane(pts) {
+    const n = pts.length;
+    let ox = 0, oy = 0, oz = 0;
+    for (const p of pts) { ox += p[0]; oy += p[1]; oz += p[2]; }
+    ox /= n; oy /= n; oz /= n;
+    let nx = 0, ny = 0, nz = 0;
+    for (let i = 0; i < n; i++) {
+      const a = pts[i], b = pts[(i + 1) % n];
+      nx += (a[1] - b[1]) * (a[2] + b[2]);
+      ny += (a[2] - b[2]) * (a[0] + b[0]);
+      nz += (a[0] - b[0]) * (a[1] + b[1]);
+    }
+    let L = Math.hypot(nx, ny, nz) || 1;
+    nx /= L; ny /= L; nz /= L;
+    // an in-plane axis u = normalize(n × smallest-axis)
+    let ux, uy, uz;
+    const ax = Math.abs(nx), ay = Math.abs(ny), az = Math.abs(nz);
+    if (ax <= ay && ax <= az) { ux = 0; uy = -nz; uz = ny; }
+    else if (ay <= az) { ux = -nz; uy = 0; uz = nx; }
+    else { ux = -ny; uy = nx; uz = 0; }
+    L = Math.hypot(ux, uy, uz) || 1;
+    ux /= L; uy /= L; uz /= L;
+    const vx = ny * uz - nz * uy, vy = nz * ux - nx * uz, vz = nx * uy - ny * ux;
+    return { ox, oy, oz, nx, ny, nz, ux, uy, uz, vx, vy, vz };
+  }
+
+  // Project a model-space point onto the plane's (u, v) coordinates.
+  function project(pl, p) {
+    const dx = p[0] - pl.ox, dy = p[1] - pl.oy, dz = p[2] - pl.oz;
+    return [dx * pl.ux + dy * pl.uy + dz * pl.uz, dx * pl.vx + dy * pl.vy + dz * pl.vz];
+  }
+
+  global.Caps = { extractLoops, bestFitPlane, project };
 })(window);

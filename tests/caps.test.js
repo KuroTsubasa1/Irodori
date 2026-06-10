@@ -30,3 +30,16 @@ test("extractLoops: two disjoint boundaries -> two loops", () => {
   assert.equal(loops.length, 2);
   assert.deepEqual(loops.map((l) => l.length).sort(), [3, 3]);
 });
+
+test("bestFitPlane: normal of a z=5 square is ±Z; projection is an isometry", () => {
+  const { Caps } = loadModules();
+  const pts = [[0, 0, 5], [4, 0, 5], [4, 4, 5], [0, 4, 5]];
+  const pl = Caps.bestFitPlane(pts);
+  assert.ok(Math.abs(Math.abs(pl.nz) - 1) < 1e-9, "normal is vertical");
+  assert.ok(Math.abs(pl.nx) < 1e-9 && Math.abs(pl.ny) < 1e-9);
+  const p = pts.map((q) => Caps.project(pl, q));
+  // side lengths preserved (projection preserves distance)
+  const d = (a, b) => Math.hypot(a[0] - b[0], a[1] - b[1]);
+  assert.ok(Math.abs(d(p[0], p[1]) - 4) < 1e-6);
+  assert.ok(Math.abs(d(p[1], p[2]) - 4) < 1e-6);
+});
