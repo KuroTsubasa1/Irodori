@@ -86,12 +86,27 @@
     raycaster = new THREE.Raycaster();
     mouse = new THREE.Vector2();
     const el = renderer.domElement;
+    // Fill-parity navigation for the brush: decide per press what the left
+    // button does — paint when the press starts on the model, orbit when it
+    // starts on empty background. Capture phase on the container so the
+    // decision lands before OrbitControls reads the event.
+    container.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (toolMode !== "paint" || e.button !== 0 || altOrbit) return;
+        const hit = pick(e.clientX, e.clientY);
+        controls.mouseButtons.LEFT = hit ? null : THREE.MOUSE.ROTATE;
+      },
+      true
+    );
     el.addEventListener("pointerdown", (e) => {
       pointerDown = { x: e.clientX, y: e.clientY };
       if (toolMode === "paint" && e.button === 0 && paintCb && !altOrbit) {
-        painting = true;
         const hit = pick(e.clientX, e.clientY);
-        if (hit && paintCb.down) paintCb.down(hit);
+        if (hit) {
+          painting = true;
+          if (paintCb.down) paintCb.down(hit);
+        }
       }
     });
     el.addEventListener("pointermove", (e) => {
@@ -158,8 +173,9 @@
     if (!controls) return;
     const M = THREE.MOUSE;
     if (mode === "paint") {
-      // left paints, right-drag rotates
-      controls.mouseButtons = { LEFT: null, MIDDLE: M.DOLLY, RIGHT: M.ROTATE };
+      // fill-parity navigation: left paints on the model / orbits from the
+      // background (per-press dispatch in init), right-drag pans, middle zooms
+      controls.mouseButtons = { LEFT: null, MIDDLE: M.DOLLY, RIGHT: M.PAN };
       renderer.domElement.style.cursor = "crosshair";
     } else {
       controls.mouseButtons = { LEFT: M.ROTATE, MIDDLE: M.DOLLY, RIGHT: M.PAN };
