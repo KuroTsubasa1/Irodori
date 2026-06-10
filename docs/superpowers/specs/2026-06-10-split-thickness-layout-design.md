@@ -1,7 +1,9 @@
 # Split Part Thickness + Row Layout (Batch L) — Design
 
 **Date:** 2026-06-10
-**Status:** Approved
+**Status:** Partially reverted — the thickness/plug portion (§1, §3 slider) was
+removed at the user's request the same day (`e8e273a`); the row layout (§2)
+remains shipped.
 
 ## Problem
 
