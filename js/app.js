@@ -48,6 +48,7 @@
     return {
       meshes: doc.meshes.map((m) => ({ paints: m.paints.slice(), dom: Int32Array.from(m.dom) })),
       splits: splitParts.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method })),
+      filaments: doc.filaments.map((f) => ({ index: f.index, hex: f.hex })),
     };
   }
   function restore(state) {
@@ -56,6 +57,7 @@
       m.dom = Int32Array.from(state.meshes[i].dom);
       Cleanup.invalidateSub(m);
     });
+    if (state.filaments) doc.filaments = state.filaments.map((f) => ({ index: f.index, hex: f.hex }));
     splitParts = state.splits.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method }));
   }
   const current = () => history[histIndex].state;
@@ -193,19 +195,51 @@
   function buildPalette() {
     const pal = $("palette");
     pal.innerHTML = "";
+    const orig = doc.origFilamentCount ?? doc.filaments.length;
     doc.filaments.forEach((f, i) => {
       const s = i + 1; // filament index = paint state
       const d = document.createElement("div");
       d.className = "pal"; d.dataset.state = s; d.style.background = f.hex; d.title = "Filament " + s;
       d.addEventListener("click", () => selectPaint(s));
+      if (s > orig) {
+        const x = document.createElement("span");
+        x.className = "del"; x.textContent = "×"; x.title = "Delete this color";
+        x.addEventListener("click", (e) => { e.stopPropagation(); deleteColor(s); });
+        d.appendChild(x);
+      }
       pal.appendChild(d);
     });
     const add = document.createElement("div");
     add.className = "pal add"; add.title = "Add a new color"; add.textContent = "+";
-    add.addEventListener("click", () => $("addColorInput").click());
+    add.addEventListener("click", () => {
+      const inp = $("addColorInput");
+      const r = add.getBoundingClientRect();
+      inp.style.left = r.left + "px";          // anchor the native picker under the +
+      inp.style.top = r.bottom + 4 + "px";
+      if (inp.showPicker) inp.showPicker(); else inp.click();
+    });
     pal.appendChild(add);
-    if (doc.filaments.length) selectPaint(doc.filaments.length);
+    if (doc.filaments.length) selectPaint(Math.min(paintState || doc.filaments.length, doc.filaments.length));
   }
+  // Delete an ADDED filament: areas painted with it return to the model default,
+  // higher paint states shift down, and the whole operation is one undo step.
+  function deleteColor(k) {
+    if (!doc || k <= (doc.origFilamentCount ?? 0)) return;
+    if (previewActive) { restore(current()); previewActive = false; }
+    clearHoverPreview();
+    busy("Removing color…", () => {
+      const mapFn = (s) => (s === k ? 0 : s > k ? s - 1 : s);
+      for (const m of doc.meshes) Cleanup.remapStates(m, mapFn);
+      doc.filaments.splice(k - 1, 1);
+      doc.filaments.forEach((f, i) => (f.index = i + 1));
+      pushHistory("Delete color");
+      buildPalette(); // re-selects a valid paint colour
+      render(null);
+      updateStats();
+      toast("Color removed · repainted to default where used");
+    });
+  }
+
   function buildObjects() {
     const ul = $("objectsList");
     ul.innerHTML = "";
@@ -505,6 +539,7 @@
     clearHoverPreview();
     restore(history[0].state);
     previewActive = false;
+    buildPalette();
     pushHistory("Reset to original");
     render(null); updateStats();
     $("previewInfo").textContent = "";
@@ -516,7 +551,7 @@
     if (isolated) { isolated = null; Viewer.setVisibleMeshes(null); }
     clearHoverPreview();
     previewActive = false; histIndex = idx;
-    restore(current()); render(null); updateStats(); updateHist();
+    restore(current()); buildPalette(); render(null); updateStats(); updateHist();
     $("previewInfo").textContent = "";
     buildObjects();
   }
@@ -559,8 +594,10 @@
     if (!doc) return;
     const hex = e.target.value; // "#rrggbb"
     doc.filaments.push({ index: doc.filaments.length + 1, hex });
+    pushHistory("Add color");
+    paintState = doc.filaments.length;
     buildPalette();
-    selectPaint(doc.filaments.length);
+    updateStats();
     toast("Added color " + hex.toUpperCase());
   });
   document.querySelectorAll("#toolbar .tool").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.tool)));
