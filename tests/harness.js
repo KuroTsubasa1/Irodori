@@ -92,4 +92,16 @@ function capBoundaryEdges(tris) {
   return once;
 }
 
-module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges };
+// Two solid triangles that are exact mirror images across x = 0 (one sub each).
+function makeMirrorPair() {
+  return {
+    nf: 2,
+    positions: new Float32Array([1, 0, 0, 2, 0, 0, 1.5, 1, 0,  -1, 0, 0, -2, 0, 0, -1.5, 1, 0]),
+    v1: Int32Array.from([0, 3]),
+    v2: Int32Array.from([1, 4]),
+    v3: Int32Array.from([2, 5]),
+    paints: ["4", "4"],
+  };
+}
+
+module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair };

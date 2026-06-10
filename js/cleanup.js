@@ -31,6 +31,7 @@
   function invalidateSub(mesh) {
     mesh._sub = null;
     mesh._subSizes = null;
+    mesh._mirror = null;
   }
 
   // Build (or return cached) the sub-triangle adjacency graph for a mesh.
@@ -501,6 +502,49 @@
     return Int32Array.from(out);
   }
 
+  // Per-sub mirror partner across the model-center plane perpendicular to `axis`
+  // (0=x,1=y,2=z): entry s = the sub whose centroid is the mirror of s's centroid
+  // (within a ~1% tolerance via a spatial grid), or -1. Cached per axis on the
+  // mesh; tolerant matching so it works on imperfectly-symmetric organic meshes.
+  function mirrorMap(mesh, axis) {
+    const g = buildSubGraph(mesh);
+    if (!mesh._mirror) mesh._mirror = {};
+    if (mesh._mirror[axis]) return mesh._mirror[axis];
+    const { cen, NS } = g;
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < NS; i++) for (let a = 0; a < 3; a++) { const v = cen[i * 3 + a]; if (v < lo[a]) lo[a] = v; if (v > hi[a]) hi[a] = v; }
+    const center = (lo[axis] + hi[axis]) / 2;
+    const diag = Math.hypot(hi[0] - lo[0], hi[1] - lo[1], hi[2] - lo[2]) || 1;
+    const cell = diag * 0.01;          // grid resolution
+    const tol2 = cell * cell;          // match tolerance (squared) ~ one cell
+    const ci = (v, a) => Math.floor((v - lo[a]) / cell);
+    const bkey = (a, b, c) => a + "," + b + "," + c;
+    const buckets = new Map();
+    for (let i = 0; i < NS; i++) {
+      const k = bkey(ci(cen[i * 3], 0), ci(cen[i * 3 + 1], 1), ci(cen[i * 3 + 2], 2));
+      let arr = buckets.get(k); if (!arr) buckets.set(k, arr = []); arr.push(i);
+    }
+    const map = new Int32Array(NS).fill(-1);
+    for (let i = 0; i < NS; i++) {
+      let mx = cen[i * 3], my = cen[i * 3 + 1], mz = cen[i * 3 + 2];
+      if (axis === 0) mx = 2 * center - mx; else if (axis === 1) my = 2 * center - my; else mz = 2 * center - mz;
+      const bx = ci(mx, 0), by = ci(my, 1), bz = ci(mz, 2);
+      let best = -1, bestD = tol2;
+      for (let dx = -1; dx <= 1; dx++) for (let dy = -1; dy <= 1; dy++) for (let dz = -1; dz <= 1; dz++) {
+        const arr = buckets.get(bkey(bx + dx, by + dy, bz + dz)); if (!arr) continue;
+        for (const j of arr) {
+          if (j === i) continue;
+          const ddx = cen[j * 3] - mx, ddy = cen[j * 3 + 1] - my, ddz = cen[j * 3 + 2] - mz;
+          const d = ddx * ddx + ddy * ddy + ddz * ddz;
+          if (d < bestD) { bestD = d; best = j; }
+        }
+      }
+      map[i] = best;
+    }
+    mesh._mirror[axis] = map;
+    return map;
+  }
+
   global.Cleanup = {
     computeDominant,
     buildSubGraph,
@@ -514,5 +558,6 @@
     subSizes,
     invalidateSub,
     selectColorRegion,
+    mirrorMap,
   };
 })(window);

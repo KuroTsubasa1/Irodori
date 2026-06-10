@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { loadModules, makeTetra } = require("./harness");
+const { loadModules, makeTetra, makeMirrorPair } = require("./harness");
 
 test("harness loads modules and Paint decodes", () => {
   const { Paint, Cleanup } = loadModules();
@@ -36,4 +36,23 @@ test("selectColorRegion floods the connected same-color region", () => {
   assert.equal(r1.length, 3, "three state-1 faces are one region");
   assert.equal(r2.length, 1, "single state-2 face");
   for (const s of r1) assert.equal(g.subLeaf[s].state, 1);
+});
+
+test("mirrorMap pairs X-mirrored sub-triangles; no partner on the Y axis", () => {
+  const { Cleanup } = loadModules();
+  const mesh = makeMirrorPair();
+  const mx = Cleanup.mirrorMap(mesh, 0); // X
+  assert.equal(mx.length, 2);
+  assert.equal(mx[0], 1, "sub 0 mirrors to sub 1 across X");
+  assert.equal(mx[1], 0, "sub 1 mirrors to sub 0 across X");
+  const my = Cleanup.mirrorMap(mesh, 1); // Y — the two subs are not Y-mirrors
+  assert.equal(my[0], -1);
+  assert.equal(my[1], -1);
+});
+
+test("mirrorMap returns -1 where no mirror exists (asymmetric tetra)", () => {
+  const { Cleanup } = loadModules();
+  const m = Cleanup.mirrorMap(makeTetra(), 0);
+  // tetra is not X-symmetric, so at least one sub has no partner
+  assert.ok([...m].some((p) => p === -1));
 });
