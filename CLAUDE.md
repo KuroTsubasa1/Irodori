@@ -49,6 +49,11 @@ graph. Keep it that way (no bundler/ESM migration).
 - `split.js` — watertight solids from sub-triangle sets. `solidFromSubs` and
   `remainderSolid` share ONE cut cap (the remainder reuses the part's cap
   reversed), so split parts and the remainder stay coincident.
+- `planecut.js` — geometric plane cut (`cutMesh`): exact triangle clipping
+  with per-edge welded section points, section chords from clipped triangles
+  AND from on-plane mesh edges, flat earcut caps wound ±n. Cutting sets
+  `doc.synthetic`, which routes export through the generated package (the
+  original XML can no longer be spliced).
 - `viewer.js` — three.js scene, picking, explode animation, preview tints.
 - `app.js` — UI glue: tools, palette, history (snapshot/undo), panels.
 
