@@ -128,6 +128,7 @@
   // positions/paints (so rotation and color edits are both written) and
   // generate a new .3mf Blob.
   async function exportZip(doc) {
+    if (doc.synthetic) return exportGenerated(doc);
     const byPath = new Map();
     for (const mesh of doc.meshes) { let a = byPath.get(mesh.path); if (!a) byPath.set(mesh.path, a = []); a.push(mesh); }
     for (const [path, fileMeshes] of byPath) {
@@ -143,6 +144,38 @@
       type: "blob",
       compression: "DEFLATE",
       compressionOptions: { level: 6 },
+      mimeType: "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
+    });
+  }
+
+  // Assemble a generated package (fresh zip) around buildSplitXML objects:
+  // preserved files copied (project settings normalized), generated model/
+  // settings files written. Shared by exportSplit and exportGenerated.
+  async function assembleGeneratedPackage(doc, objects) {
+    let bt = "1 0 0 0 1 0 0 0 1 125 125 0";
+    const rootTxt = await readText(doc.zip, /3dmodel\.model$/i);
+    if (rootTxt) { const m = rootTxt.match(/<item[^>]*transform="([^"]+)"/); if (m) bt = m[1]; }
+    const xml = Split.buildSplitXML(objects, { buildTransform: bt, defaultExtruder: doc.defaultExtruder });
+    const zip = new JSZip();
+    const keep = [
+      [/project_settings\.config$/i, "Metadata/project_settings.config"],
+      [/\[Content_Types\]\.xml$/i, "[Content_Types].xml"],
+      [/_rels\/\.rels$/i, "_rels/.rels"],
+      [/3dmodel\.model\.rels$/i, "3D/_rels/3dmodel.model.rels"],
+    ];
+    for (const [rx, path] of keep) {
+      let t = await readText(doc.zip, rx);
+      if (t == null) continue;
+      if (path === "Metadata/project_settings.config") {
+        t = normalizeFilamentConfig(t, doc.origFilamentCount ?? doc.filaments.length, doc.filaments);
+      }
+      zip.file(path, t);
+    }
+    zip.file("3D/3dmodel.model", xml.rootModel);
+    zip.file("3D/Objects/object_1.model", xml.objectsModel);
+    zip.file("Metadata/model_settings.config", xml.modelSettings);
+    return zip.generateAsync({
+      type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 },
       mimeType: "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
     });
   }
@@ -189,44 +222,18 @@
     }
     if (!objects.length) throw new Error("Nothing to export");
 
-    // build transform from the original root model (best-effort)
-    let bt = "1 0 0 0 1 0 0 0 1 125 125 0";
-    const rootTxt = await readText(doc.zip, /3dmodel\.model$/i);
-    if (rootTxt) {
-      const m = rootTxt.match(/<item[^>]*transform="([^"]+)"/);
-      if (m) bt = m[1];
-    }
+    return assembleGeneratedPackage(doc, objects);
+  }
 
-    const xml = Split.buildSplitXML(objects, {
-      buildTransform: bt, defaultExtruder: doc.defaultExtruder,
+  // Export a document whose geometry no longer matches the source files (plane
+  // cuts): every mesh becomes a generated object carrying its full paint.
+  async function exportGenerated(doc) {
+    const objects = doc.meshes.map((m, i) => {
+      const I = new Uint32Array(m.nf * 3);
+      for (let f = 0; f < m.nf; f++) { I[f * 3] = m.v1[f]; I[f * 3 + 1] = m.v2[f]; I[f * 3 + 2] = m.v3[f]; }
+      return { name: "Object " + (i + 1), extruder: doc.defaultExtruder, positions: m.positions, indices: I, triState: null, paints: m.paints };
     });
-
-    // fresh zip: copy preserved files, replace the three generated ones
-    const zip = new JSZip();
-    const keep = [
-      [/project_settings\.config$/i, "Metadata/project_settings.config"],
-      [/\[Content_Types\]\.xml$/i, "[Content_Types].xml"],
-      [/_rels\/\.rels$/i, "_rels/.rels"],
-      [/3dmodel\.model\.rels$/i, "3D/_rels/3dmodel.model.rels"],
-    ];
-    for (const [rx, path] of keep) {
-      let t = await readText(doc.zip, rx);
-      if (t == null) continue;
-      if (path === "Metadata/project_settings.config") {
-        t = normalizeFilamentConfig(t, doc.origFilamentCount ?? doc.filaments.length, doc.filaments);
-      }
-      zip.file(path, t);
-    }
-    zip.file("3D/3dmodel.model", xml.rootModel);
-    zip.file("3D/Objects/object_1.model", xml.objectsModel);
-    zip.file("Metadata/model_settings.config", xml.modelSettings);
-
-    return await zip.generateAsync({
-      type: "blob",
-      compression: "DEFLATE",
-      compressionOptions: { level: 6 },
-      mimeType: "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
-    });
+    return assembleGeneratedPackage(doc, objects);
   }
 
   // Export-time filament normalization: extend per-filament arrays for added
@@ -260,5 +267,5 @@
     return JSON.stringify(j);
   }
 
-  global.ThreeMF = { load, exportZip, exportSplit, extendFilamentConfig, normalizeFilamentConfig, parseMeshes, rebuildModelFile };
+  global.ThreeMF = { load, exportZip, exportSplit, exportGenerated, extendFilamentConfig, normalizeFilamentConfig, parseMeshes, rebuildModelFile };
 })(window);

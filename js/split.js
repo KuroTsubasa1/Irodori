@@ -292,7 +292,7 @@
     // --- objects file: one <object> mesh per color ---
     const objBlocks = objects.map((o, k) => {
       const id = k + 1;
-      const P = o.positions, I = o.indices, TS = o.triState;
+      const P = o.positions, I = o.indices, TS = o.triState, PS = o.paints;
       const vlines = [];
       for (let i = 0; i < P.length; i += 3)
         vlines.push('     <vertex x="' + fnum(P[i]) + '" y="' + fnum(P[i + 1]) +
@@ -301,7 +301,10 @@
       for (let t = 0; t < I.length; t += 3) {
         let line = '     <triangle v1="' + I[t] + '" v2="' + I[t + 1] +
           '" v3="' + I[t + 2] + '"';
-        if (TS) {
+        if (PS) {
+          const p = PS[t / 3];
+          if (p) line += ' paint_color="' + p + '"';
+        } else if (TS) {
           const code = Paint.encode({ leaf: true, state: TS[t / 3] });
           if (code) line += ' paint_color="' + code + '"';
         }

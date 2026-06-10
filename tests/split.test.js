@@ -147,3 +147,15 @@ test("tube solids are directed-watertight with positive volume (all methods)", (
     assert.ok(vol > 7.9 && vol < 8.1, method + ": volume ~8 (2x2x2 tube), got " + vol.toFixed(2));
   }
 });
+
+test("buildSplitXML emits verbatim paint_color strings when objects carry paints", () => {
+  const { Split } = loadModules();
+  const tri = {
+    name: "X", extruder: 1,
+    positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]),
+    indices: Uint32Array.from([0, 1, 2]),
+    triState: null, paints: ["841"],
+  };
+  const xml = Split.buildSplitXML([tri], { buildTransform: "1 0 0 0 1 0 0 0 1 0 0 0", defaultExtruder: 1 });
+  assert.ok(xml.objectsModel.includes('paint_color="841"'), "verbatim paint string");
+});
