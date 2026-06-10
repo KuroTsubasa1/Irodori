@@ -264,8 +264,15 @@
     if (!stroke || hit.meshIndex !== stroke.mi) return;
     const m = doc.meshes[hit.meshIndex];
     const subs = Cleanup.selectRadius(m, hit.localSub, hit.point.x, hit.point.y, hit.point.z, brushRadius());
+    let all = subs;
+    if ($("brushSym").checked) {
+      const axis = { x: 0, y: 1, z: 2 }[$("brushSymAxis").value] || 0;
+      const mir = Cleanup.mirrorMap(m, axis);
+      all = subs.slice();
+      for (const s of subs) { const p = mir[s]; if (p >= 0) all.push(p); }
+    }
     const g = [];
-    for (const s of subs) { stroke.pend.add(s); g.push(Viewer.toGlobalSub(hit.meshIndex, s)); }
+    for (const s of all) { stroke.pend.add(s); g.push(Viewer.toGlobalSub(hit.meshIndex, s)); }
     Viewer.paintSubs(g, paintState);
   }
   function endStroke() {
