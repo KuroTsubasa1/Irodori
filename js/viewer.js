@@ -34,6 +34,7 @@
     painting = false,
     moveRaf = false,
     lastMove = null;
+  let altOrbit = false; // Alt held in paint mode -> temporary left-drag orbit
   // brush/ring cursor preview
   let cursorLoop = null,
     hoverEnabled = false,
@@ -84,7 +85,7 @@
     const el = renderer.domElement;
     el.addEventListener("pointerdown", (e) => {
       pointerDown = { x: e.clientX, y: e.clientY };
-      if (toolMode === "paint" && e.button === 0 && paintCb) {
+      if (toolMode === "paint" && e.button === 0 && paintCb && !altOrbit) {
         painting = true;
         const hit = pick(e.clientX, e.clientY);
         if (hit && paintCb.down) paintCb.down(hit);
@@ -122,12 +123,29 @@
     });
 
     window.addEventListener("resize", () => onResize(container));
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Alt" && toolMode === "paint" && !altOrbit) {
+        altOrbit = true;
+        controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+        renderer.domElement.style.cursor = "grab";
+      }
+    });
+    window.addEventListener("keyup", (e) => {
+      if (e.key === "Alt" && altOrbit) {
+        altOrbit = false;
+        if (toolMode === "paint") {
+          controls.mouseButtons.LEFT = null;
+          renderer.domElement.style.cursor = "crosshair";
+        }
+      }
+    });
     animate();
   }
 
   // Tool/interaction mode: 'orbit' | 'pick' (click) | 'paint' (drag).
   function setTool(mode) {
     toolMode = mode;
+    altOrbit = false;
     if (!controls) return;
     const M = THREE.MOUSE;
     if (mode === "paint") {
