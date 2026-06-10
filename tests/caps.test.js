@@ -117,3 +117,21 @@ test("earcut: single convex loop (no holes) still triangulates", () => {
   const cap = Caps.triangulateLoops([[0, 1, 2, 3]], (v) => coords[v], "earcut");
   assert.equal(cap.tris.length, 2);
 });
+
+test("triangulateLoops throws on an unknown method", () => {
+  const { Caps } = loadModules();
+  const coords = { 0: [0, 0, 0], 1: [1, 0, 0], 2: [1, 1, 0] };
+  assert.throws(() => Caps.triangulateLoops([[0, 1, 2]], (v) => coords[v], "nope"), /Unknown cap method/);
+});
+
+test("earcut: two independent outers (no nesting) -> 4 tris, 0 extra, 8 boundary edges", () => {
+  const { Caps } = loadModules();
+  const coords = {
+    0: [0, 0, 0], 1: [2, 0, 0], 2: [2, 2, 0], 3: [0, 2, 0],
+    4: [5, 0, 0], 5: [7, 0, 0], 6: [7, 2, 0], 7: [5, 2, 0],
+  };
+  const cap = Caps.triangulateLoops([[0, 1, 2, 3], [4, 5, 6, 7]], (v) => coords[v], "earcut");
+  assert.equal(cap.tris.length, 4);
+  assert.equal(cap.extraPts.length, 0);
+  assert.equal(capBoundaryEdges(cap.tris).size, 8);
+});

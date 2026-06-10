@@ -191,6 +191,9 @@
       }
       return inside;
     };
+    // One nesting level only: outer + its holes. A loop nested inside a hole (an
+    // "island") is treated as a sibling hole (documented limitation; deeper
+    // co-planar nesting is rare for paint-region cuts).
     const order = L.map((_, i) => i).sort((a, b) => L[b].area - L[a].area);
     const used = new Set();
     const groups = []; // { outer:index, holes:index[] }
@@ -206,45 +209,56 @@
     }
 
     const useCDT = method === "cdt";
+    if (!useCDT && method !== "earcut") throw new Error("Unknown cap method: " + method);
     const P2T = global.poly2tri;
     const SU = global.THREE && global.THREE.ShapeUtils;
     if (useCDT && !(P2T && P2T.SweepContext)) throw new Error("poly2tri not loaded (CDT)");
-    if (!useCDT && !(SU && SU.triangulateShape)) throw new Error("THREE.ShapeUtils not loaded (Earcut)");
+    if (!(SU && SU.triangulateShape)) throw new Error("THREE.ShapeUtils not loaded (Earcut)");
 
-    for (const g of groups) {
-      const outer = L[g.outer], holes = g.holes.map((i) => L[i]);
-      if (useCDT) {
-        // poly2tri throws on duplicate/coincident points — dedupe per loop.
-        const EPS = 1e-7;
-        const mkPts = (loopObj) => {
-          const ptsOut = [];
-          for (let k = 0; k < loopObj.poly2.length; k++) {
-            const p = loopObj.poly2[k], prev = ptsOut.length ? ptsOut[ptsOut.length - 1] : null;
-            if (prev && Math.abs(prev.x - p[0]) < EPS && Math.abs(prev.y - p[1]) < EPS) continue;
-            const pt = new P2T.Point(p[0], p[1]); pt._vid = loopObj.vids[k]; ptsOut.push(pt);
-          }
-          if (ptsOut.length > 1) {
-            const a = ptsOut[0], b = ptsOut[ptsOut.length - 1];
-            if (Math.abs(a.x - b.x) < EPS && Math.abs(a.y - b.y) < EPS) ptsOut.pop();
-          }
-          return ptsOut;
-        };
-        const ctx = new P2T.SweepContext(mkPts(outer));
-        for (const h of holes) ctx.addHole(mkPts(h));
+    // Emit ear-clipped triangles for one outer+holes group (robust; also the CDT
+    // fallback). THREE.ShapeUtils.triangulateShape returns index triples into the
+    // concatenated [contour, ...holes] point list; map back to vids.
+    const emitEarcut = (outer, holes) => {
+      const V2 = (p) => (global.THREE.Vector2 ? new global.THREE.Vector2(p[0], p[1]) : { x: p[0], y: p[1] });
+      const contour = outer.poly2.map(V2);
+      const holeContours = holes.map((h) => h.poly2.map(V2));
+      const flatVids = outer.vids.concat(...holes.map((h) => h.vids));
+      for (const [a, b, c] of SU.triangulateShape(contour, holeContours)) {
+        tris.push([idxOf(flatVids[a]), idxOf(flatVids[b]), idxOf(flatVids[c])]);
+      }
+    };
+
+    for (const grp of groups) {
+      const outer = L[grp.outer], holes = grp.holes.map((i) => L[i]);
+      if (!useCDT) { emitEarcut(outer, holes); continue; }
+      // CDT path: poly2tri throws on duplicate/coincident points -> dedupe per loop.
+      const EPS = 1e-7;
+      const mkPts = (loopObj) => {
+        const ptsOut = [];
+        for (let k = 0; k < loopObj.poly2.length; k++) {
+          const p = loopObj.poly2[k], prev = ptsOut.length ? ptsOut[ptsOut.length - 1] : null;
+          if (prev && Math.abs(prev.x - p[0]) < EPS && Math.abs(prev.y - p[1]) < EPS) continue;
+          const pt = new P2T.Point(p[0], p[1]); pt._vid = loopObj.vids[k]; ptsOut.push(pt);
+        }
+        if (ptsOut.length > 1) {
+          const a = ptsOut[0], b = ptsOut[ptsOut.length - 1];
+          if (Math.abs(a.x - b.x) < EPS && Math.abs(a.y - b.y) < EPS) ptsOut.pop();
+        }
+        return ptsOut;
+      };
+      const outerPts = mkPts(outer);
+      if (outerPts.length < 3) continue; // degenerate group -> nothing to cap
+      try {
+        const ctx = new P2T.SweepContext(outerPts);
+        for (const h of holes) { const hp = mkPts(h); if (hp.length >= 3) ctx.addHole(hp); }
         ctx.triangulate();
         for (const t of ctx.getTriangles()) {
           tris.push([idxOf(t.getPoint(0)._vid), idxOf(t.getPoint(1)._vid), idxOf(t.getPoint(2)._vid)]);
         }
-      } else {
-        // THREE.ShapeUtils.triangulateShape(contour, holes) -> index triples into
-        // the concatenated [contour, ...holes] point list; map back to vids.
-        const V2 = (p) => (global.THREE.Vector2 ? new global.THREE.Vector2(p[0], p[1]) : { x: p[0], y: p[1] });
-        const contour = outer.poly2.map(V2);
-        const holeContours = holes.map((h) => h.poly2.map(V2));
-        const flatVids = outer.vids.concat(...holes.map((h) => h.vids));
-        for (const [a, b, c] of SU.triangulateShape(contour, holeContours)) {
-          tris.push([idxOf(flatVids[a]), idxOf(flatVids[b]), idxOf(flatVids[c])]);
-        }
+      } catch (e) {
+        // poly2tri rejects some valid-but-awkward inputs (collinear / boundary-
+        // touching holes). Fall back to the robust earcut backend for this group.
+        emitEarcut(outer, holes);
       }
     }
     return { verts, extraPts, tris };
