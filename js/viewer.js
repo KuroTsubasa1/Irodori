@@ -24,6 +24,7 @@
   let splitObjs = [];    // [{ mesh, target:THREE.Vector3, cur:THREE.Vector3 }]
   let remainderCapObjs = []; // separate double-sided meshes that fill split holes
   let claimedSets = [];  // per mesh: Set<localSub> hidden from the main mesh
+  let visibleMeshes = null; // Set<meshIndex> to render, or null = all
 
   // picking
   let raycaster, mouse;
@@ -362,6 +363,15 @@
     return new THREE.Mesh(gg, mat);
   }
 
+  function setVisibleMeshes(set) { visibleMeshes = set; }
+  // Show only the split parts whose id is in idSet (null = show all parts).
+  function setPartVisibility(idSet) {
+    for (const o of splitObjs) o.mesh.visible = !idSet || idSet.has(o.id);
+    for (const m of remainderCapObjs) m.visible = !idSet; // caps only make sense with the main mesh
+  }
+  // The THREE.Mesh of the split part with the given id (for framing on it).
+  function partObject(id) { const o = splitObjs.find((x) => x.id === id); return o ? o.mesh : null; }
+
   // parts: [{ meshIndex, subs, state }]
   function setSplitParts(parts) {
     const prevById = new Map();
@@ -444,6 +454,7 @@
       const P = m.positions;
       const { solid, trees } = meshTrees[mi];
       meshSubOffset[mi] = t;
+      if (visibleMeshes && !visibleMeshes.has(mi)) { continue; }
       let origLocal = 0; // original leaf index within this mesh (claimed + unclaimed)
       const claimedSet = claimedSets[mi] || new Set();
       for (let i = 0; i < m.nf; i++) {
@@ -519,17 +530,15 @@
     colorAttr.needsUpdate = true;
   }
 
-  function frame() {
-    if (!geom) return;
-    const bs = geom.boundingSphere;
-    const c = bs.center,
-      r = bs.radius || 50;
+  function frame(obj) {
+    const src = (obj && obj.geometry && obj.geometry.boundingSphere) ? obj.geometry.boundingSphere
+      : (geom ? geom.boundingSphere : null);
+    if (!src) return;
+    const c = src.center, r = src.radius || 50;
     controls.target.copy(c);
-    // Z-up: view from front (-Y), slightly to the side and above.
     const dir = new THREE.Vector3(0.5, -1.0, 0.45).normalize();
     camera.position.copy(c).add(dir.multiplyScalar(r * 2.6));
-    camera.near = r / 100;
-    camera.far = r * 100;
+    camera.near = r / 100; camera.far = r * 100;
     camera.updateProjectionMatrix();
     controls.update();
   }
@@ -553,5 +562,8 @@
     setSplitParts,
     setPreview,
     clearPreview,
+    setVisibleMeshes,
+    setPartVisibility,
+    partObject,
   };
 })(window);
