@@ -72,5 +72,59 @@
     return tris;
   }
 
-  global.Liepa = { dpFill };
+  /* Pick <= maxCoarse rim vertices by accumulated chord length (always keeps
+   * index 0). pts: full-resolution rim points in order. Returns ascending
+   * indices into pts. */
+  function decimate(pts, maxCoarse) {
+    const n = pts.length;
+    if (n <= maxCoarse) return [...Array(n).keys()];
+    let total = 0;
+    for (let i = 0; i < n; i++) total += dist(pts[i], pts[(i + 1) % n]);
+    const step = total / maxCoarse;
+    const idx = [0];
+    let acc = 0;
+    for (let i = 0; i < n - 1; i++) {
+      acc += dist(pts[i], pts[i + 1]);
+      if (acc >= step && idx[idx.length - 1] !== i + 1) { idx.push(i + 1); acc -= step; }
+    }
+    return idx;
+  }
+
+  function refine(P, n, extraPts, tris) {} // Task 3
+  function fair(P, n, extraPts, tris) {}   // Task 4
+
+  /* Fill one boundary loop: decimate -> DP cap on the coarse polygon -> DP on
+   * each fine strip -> (Task 3) refine -> (Task 4) fair. Returns
+   * { extraPts, tris } in loop-local indexing. opts: { maxCoarse=200,
+   * refine=true, fair=true }. */
+  function fillLoop(loop, getPt, opts) {
+    opts = opts || {};
+    const maxCoarse = opts.maxCoarse || 200;
+    const n = loop.length;
+    if (n < 3) return { extraPts: [], tris: [] };
+    const P = loop.map(getPt);
+    const coarse = decimate(P, maxCoarse);
+    // coarse cap (indices into `coarse` -> map back to loop indices)
+    const coarsePts = coarse.map((i) => P[i]);
+    const tris = dpFill(coarsePts).map((t) => t.map((c) => coarse[c]));
+    // strips: reattach the skipped fine chain under each coarse edge with the
+    // same DP (strip polygon = [a, fine..., b]; its (b,a) edge pairs with the
+    // coarse cap's (a,b) edge in the opposite direction — one oriented patch)
+    const m = coarse.length;
+    for (let t = 0; t < m; t++) {
+      const a = coarse[t], b = coarse[(t + 1) % m];
+      const chain = [];
+      for (let i = (a + 1) % n; i !== b; i = (i + 1) % n) chain.push(i);
+      if (!chain.length) continue;
+      const stripIdx = [a, ...chain, b];
+      const stripTris = dpFill(stripIdx.map((i) => P[i]));
+      for (const tri of stripTris) tris.push(tri.map((s) => stripIdx[s]));
+    }
+    const extraPts = [];
+    if (opts.refine !== false) refine(P, n, extraPts, tris);
+    if (opts.fair !== false) fair(P, n, extraPts, tris);
+    return { extraPts, tris };
+  }
+
+  global.Liepa = { dpFill, decimate, fillLoop };
 })(window);
