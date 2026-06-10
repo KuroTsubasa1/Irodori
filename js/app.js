@@ -21,7 +21,7 @@
   let paintState = null; // selected palette color
   let stroke = null; // active brush stroke
   let lastHit = null; // last hovered surface hit (for live cursor)
-  let splitParts = []; // [{ meshIndex, subs:Int32Array, state }]
+  let splitParts = []; // [{ meshIndex, subs:Int32Array, state, method }]
   const claimedByMesh = () => {
     const sets = doc.meshes.map(() => new Set());
     for (const p of splitParts) for (const s of p.subs) sets[p.meshIndex].add(s);

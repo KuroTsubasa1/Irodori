@@ -135,3 +135,14 @@ test("earcut: two independent outers (no nesting) -> 4 tris, 0 extra, 8 boundary
   assert.equal(cap.extraPts.length, 0);
   assert.equal(capBoundaryEdges(cap.tris).size, 8);
 });
+
+test("earcut/cdt: a degenerate (collinear) loop still caps via centroid fallback", () => {
+  const { Caps } = loadModules();
+  const coords = { 0: [0, 0, 0], 1: [1, 0, 0], 2: [2, 0, 0], 3: [3, 0, 0] }; // collinear
+  for (const method of ["earcut", "cdt"]) {
+    const cap = Caps.triangulateLoops([[0, 1, 2, 3]], (v) => coords[v], method);
+    assert.equal(cap.extraPts.length, 1, method + " used the centroid fallback");
+    assert.equal(cap.tris.length, 4, method + " fanned the 4-vertex loop");
+    assert.equal(capBoundaryEdges(cap.tris).size, 4, method + " cap covers the loop boundary");
+  }
+});

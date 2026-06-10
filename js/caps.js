@@ -141,17 +141,21 @@
     const extraPts = [];
     const tris = [];
 
+    // Centroid fan over a single loop (also the degenerate fallback below): adds
+    // the loop's centroid as an interior point and fans to it. Always yields a
+    // watertight cap (each loop edge used once) for any loop with >= 3 vids.
+    const emitCentroidFan = (loopVids) => {
+      let cx = 0, cy = 0, cz = 0;
+      for (const v of loopVids) { const p = getPt(v); cx += p[0]; cy += p[1]; cz += p[2]; }
+      const n = loopVids.length;
+      cx /= n; cy /= n; cz /= n;
+      const cRef = verts.length + extraPts.length;
+      extraPts.push([cx, cy, cz]);
+      for (let i = 0; i < n; i++) tris.push([cRef, idxOf(loopVids[i]), idxOf(loopVids[(i + 1) % n])]);
+    };
+
     if (method === "centroid") {
-      for (const loop of loops) {
-        let cx = 0, cy = 0, cz = 0;
-        for (const v of loop) { const p = getPt(v); cx += p[0]; cy += p[1]; cz += p[2]; }
-        cx /= loop.length; cy /= loop.length; cz /= loop.length;
-        const cRef = verts.length + extraPts.length;
-        extraPts.push([cx, cy, cz]);
-        for (let i = 0; i < loop.length; i++) {
-          tris.push([cRef, idxOf(loop[i]), idxOf(loop[(i + 1) % loop.length])]);
-        }
-      }
+      for (const loop of loops) emitCentroidFan(loop);
       return { verts, extraPts, tris };
     }
 
@@ -160,9 +164,11 @@
         const pts3 = loop.map(getPt);
         const pl = bestFitPlane(pts3);
         const poly2 = pts3.map((p) => project(pl, p));
+        const before = tris.length;
         for (const [a, b, c] of earClip2D(poly2)) {
           tris.push([idxOf(loop[a]), idxOf(loop[b]), idxOf(loop[c])]);
         }
+        if (tris.length === before) emitCentroidFan(loop); // degenerate -> guarantee a cap
       }
       return { verts, extraPts, tris };
     }
@@ -230,36 +236,44 @@
 
     for (const grp of groups) {
       const outer = L[grp.outer], holes = grp.holes.map((i) => L[i]);
-      if (!useCDT) { emitEarcut(outer, holes); continue; }
-      // CDT path: poly2tri throws on duplicate/coincident points -> dedupe per loop.
-      const EPS = 1e-7;
-      const mkPts = (loopObj) => {
-        const ptsOut = [];
-        for (let k = 0; k < loopObj.poly2.length; k++) {
-          const p = loopObj.poly2[k], prev = ptsOut.length ? ptsOut[ptsOut.length - 1] : null;
-          if (prev && Math.abs(prev.x - p[0]) < EPS && Math.abs(prev.y - p[1]) < EPS) continue;
-          const pt = new P2T.Point(p[0], p[1]); pt._vid = loopObj.vids[k]; ptsOut.push(pt);
-        }
-        if (ptsOut.length > 1) {
-          const a = ptsOut[0], b = ptsOut[ptsOut.length - 1];
-          if (Math.abs(a.x - b.x) < EPS && Math.abs(a.y - b.y) < EPS) ptsOut.pop();
-        }
-        return ptsOut;
-      };
-      const outerPts = mkPts(outer);
-      if (outerPts.length < 3) continue; // degenerate group -> nothing to cap
-      try {
-        const ctx = new P2T.SweepContext(outerPts);
-        for (const h of holes) { const hp = mkPts(h); if (hp.length >= 3) ctx.addHole(hp); }
-        ctx.triangulate();
-        for (const t of ctx.getTriangles()) {
-          tris.push([idxOf(t.getPoint(0)._vid), idxOf(t.getPoint(1)._vid), idxOf(t.getPoint(2)._vid)]);
-        }
-      } catch (e) {
-        // poly2tri rejects some valid-but-awkward inputs (collinear / boundary-
-        // touching holes). Fall back to the robust earcut backend for this group.
+      const before = tris.length;
+      if (!useCDT) {
         emitEarcut(outer, holes);
+      } else {
+        // CDT path: poly2tri throws on duplicate/coincident points -> dedupe per loop.
+        const EPS = 1e-7;
+        const mkPts = (loopObj) => {
+          const ptsOut = [];
+          for (let k = 0; k < loopObj.poly2.length; k++) {
+            const p = loopObj.poly2[k], prev = ptsOut.length ? ptsOut[ptsOut.length - 1] : null;
+            if (prev && Math.abs(prev.x - p[0]) < EPS && Math.abs(prev.y - p[1]) < EPS) continue;
+            const pt = new P2T.Point(p[0], p[1]); pt._vid = loopObj.vids[k]; ptsOut.push(pt);
+          }
+          if (ptsOut.length > 1) {
+            const a = ptsOut[0], b = ptsOut[ptsOut.length - 1];
+            if (Math.abs(a.x - b.x) < EPS && Math.abs(a.y - b.y) < EPS) ptsOut.pop();
+          }
+          return ptsOut;
+        };
+        const outerPts = mkPts(outer);
+        if (outerPts.length >= 3) {
+          try {
+            const ctx = new P2T.SweepContext(outerPts);
+            for (const h of holes) { const hp = mkPts(h); if (hp.length >= 3) ctx.addHole(hp); }
+            ctx.triangulate();
+            for (const t of ctx.getTriangles()) {
+              tris.push([idxOf(t.getPoint(0)._vid), idxOf(t.getPoint(1)._vid), idxOf(t.getPoint(2)._vid)]);
+            }
+          } catch (e) {
+            emitEarcut(outer, holes); // collinear / boundary-touching -> robust earcut
+          }
+        } else {
+          emitEarcut(outer, holes); // degenerate after dedupe -> try earcut
+        }
       }
+      // Guarantee a watertight cap: if nothing was emitted for this group
+      // (fully degenerate/collinear loop), fall back to a centroid fan.
+      if (tris.length === before) emitCentroidFan(outer.vids);
     }
     return { verts, extraPts, tris };
   }
