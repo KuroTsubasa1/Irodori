@@ -90,7 +90,84 @@
     return idx;
   }
 
-  function refine(P, n, extraPts, tris) {} // Task 3
+  // circumcenter of a 3-D triangle (in its own plane) and circumradius
+  function circumsphere(a, b, c) {
+    const ab = sub(b, a), ac = sub(c, a);
+    const abXac = cross(ab, ac);
+    const d = 2 * dot(abXac, abXac);
+    if (d < 1e-20) return null; // degenerate
+    const t1 = cross(abXac, ab), t2 = cross(ac, abXac);
+    const l1 = dot(ac, ac), l2 = dot(ab, ab);
+    const off = [(t2[0] * l1 + t1[0] * l2) / d, (t2[1] * l1 + t1[1] * l2) / d, (t2[2] * l1 + t1[2] * l2) / d];
+    const cc = [a[0] + off[0], a[1] + off[1], a[2] + off[2]];
+    return { cc, r: dist(cc, a) };
+  }
+
+  /* Liepa refinement: split triangles whose centroid is far (vs the local
+   * scale sigma) from all corners, then relax INTERIOR edges by the
+   * empty-circumsphere test. Mutates extraPts/tris in place. P = rim points
+   * (frozen); vertex i >= n reads extraPts[i - n]. */
+  function refine(P, n, extraPts, tris) {
+    const pos = (i) => (i < n ? P[i] : extraPts[i - n]);
+    // sigma: rim verts = mean of their two rim edge lengths; inserted = corner mean
+    const sigma = new Map();
+    for (let i = 0; i < n; i++) {
+      sigma.set(i, (dist(P[i], P[(i + 1) % n]) + dist(P[i], P[(i - 1 + n) % n])) / 2);
+    }
+    const isRimEdge = (u, v) => u < n && v < n && ((v - u + n) % n === 1 || (u - v + n) % n === 1);
+    const SQRT2 = Math.SQRT2;
+
+    for (let pass = 0; pass < 10; pass++) {
+      // --- split pass ---
+      let split = 0;
+      for (let t = 0; t < tris.length; t++) {
+        const [a, b, c] = tris[t];
+        const pa = pos(a), pb = pos(b), pc = pos(c);
+        const m = [(pa[0] + pb[0] + pc[0]) / 3, (pa[1] + pb[1] + pc[1]) / 3, (pa[2] + pb[2] + pc[2]) / 3];
+        const sm = (sigma.get(a) + sigma.get(b) + sigma.get(c)) / 3;
+        const ok = [a, b, c].every((v) => {
+          const d = SQRT2 * dist(m, pos(v));
+          return d > sm && d > sigma.get(v);
+        });
+        if (!ok) continue;
+        const mi = n + extraPts.length;
+        extraPts.push(m);
+        sigma.set(mi, sm);
+        tris[t] = [a, b, mi];
+        tris.push([b, c, mi], [c, a, mi]);
+        split++;
+      }
+      // --- flip relaxation (interior edges only) ---
+      let flipped = 0, guard = 0;
+      let changed = true;
+      while (changed && guard++ < 5) {
+        changed = false;
+        const edgeTris = new Map(); // "u_v" (sorted) -> [triIndex...]
+        const ek = (u, v) => (u < v ? u + "_" + v : v + "_" + u);
+        tris.forEach((t, ti) => { for (const [u, v] of [[t[0], t[1]], [t[1], t[2]], [t[2], t[0]]]) { const k = ek(u, v); let a = edgeTris.get(k); if (!a) edgeTris.set(k, (a = [])); a.push(ti); } });
+        for (const [k, owners] of edgeTris) {
+          if (owners.length !== 2) continue;
+          const [u, v] = k.split("_").map(Number);
+          if (isRimEdge(u, v)) continue;
+          const [t1, t2] = owners;
+          const o1 = tris[t1].find((x) => x !== u && x !== v);
+          const o2 = tris[t2].find((x) => x !== u && x !== v);
+          if (o1 === undefined || o2 === undefined || o1 === o2) continue;
+          if (isRimEdge(o1, o2)) continue; // don't flip onto a rim edge
+          if (edgeTris.has(ek(o1, o2))) continue; // flip target edge already exists
+          const cs = circumsphere(pos(u), pos(v), pos(o1));
+          if (!cs || dist(pos(o2), cs.cc) >= cs.r - 1e-9) continue;
+          // flip (u,v) -> (o1,o2), keeping each new triangle's winding from its parent
+          tris[t1] = [u, o2, o1];
+          tris[t2] = [v, o1, o2];
+          flipped++; changed = true;
+          break; // rebuild edgeTris from scratch to avoid stale state
+        }
+      }
+      if (!split && !flipped) break;
+    }
+  }
+
   function fair(P, n, extraPts, tris) {}   // Task 4
 
   /* Fill one boundary loop: decimate -> DP cap on the coarse polygon -> DP on

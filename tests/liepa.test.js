@@ -69,3 +69,16 @@ test("decimate keeps order, starts at 0, and respects maxCoarse", () => {
   assert.ok(idx.length <= 13 && idx.length >= 10, "got " + idx.length);
   for (let i = 1; i < idx.length; i++) assert.ok(idx[i] > idx[i - 1], "ascending");
 });
+
+test("refine inserts interior points and preserves rim coverage", () => {
+  const { Liepa } = loadModules();
+  const n = 60;
+  const loop = [...Array(n).keys()];
+  const getPt = (i) => { const a = (i / n) * Math.PI * 2; return [Math.cos(a) * 10, Math.sin(a) * 10, 0]; };
+  const cap = Liepa.fillLoop(loop, getPt, { maxCoarse: 16, refine: true, fair: false });
+  assert.ok(cap.extraPts.length > 0, "interior points inserted (rim edges ~1, coarse cap tris huge)");
+  const cov = rimCoverage(n, cap.tris);
+  assert.equal(cov.rimOnce, n, "rim still covered exactly once");
+  assert.equal(cov.rimWrong, 0);
+  assert.equal(cov.internalWrong, 0, "interior edges still paired after splits+flips");
+});
