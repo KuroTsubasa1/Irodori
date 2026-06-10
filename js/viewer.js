@@ -410,7 +410,7 @@
     const c = geom.boundingSphere ? geom.boundingSphere.center : new THREE.Vector3();
     const r = geom.boundingSphere ? geom.boundingSphere.radius || 50 : 50;
     for (const p of parts) {
-      const s = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "earcut");
+      const s = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "liepa");
       const gg = new THREE.BufferGeometry();
       gg.setAttribute("position", new THREE.BufferAttribute(s.positions, 3));
       gg.setIndex(new THREE.BufferAttribute(s.indices, 1));
