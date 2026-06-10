@@ -147,7 +147,7 @@
       const newText = mesh._pre + vBlock + mesh._mid + tBlock + mesh._tail;
       doc.zip.file(mesh.path, newText);
     }
-    if (doc.filaments.length > (doc.origFilamentCount || doc.filaments.length)) {
+    if (doc.filaments.length > (doc.origFilamentCount ?? 0)) {
       const arr = doc.zip.file(/project_settings\.config$/i);
       if (arr && arr.length) {
         const text = await arr[0].async("string");
@@ -257,7 +257,7 @@
         }
       }
     }
-    j.filament_colour = filaments.map((f) => (f.hex.length >= 7 ? f.hex.slice(0, 7) : f.hex) + "FF");
+    j.filament_colour = filaments.map((f) => (f.hex.length >= 7 ? f.hex.slice(0, 7) : f.hex).toUpperCase() + "FF");
     return JSON.stringify(j);
   }
 
