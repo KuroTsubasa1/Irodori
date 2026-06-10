@@ -159,3 +159,24 @@ test("buildSplitXML emits verbatim paint_color strings when objects carry paints
   const xml = Split.buildSplitXML([tri], { buildTransform: "1 0 0 0 1 0 0 0 1 0 0 0", defaultExtruder: 1 });
   assert.ok(xml.objectsModel.includes('paint_color="841"'), "verbatim paint string");
 });
+
+test("layoutParts lines parts up beside the body, bottoms aligned", () => {
+  const { Split } = loadModules();
+  const box = (x0, y0, z0, x1, y1, z1) => ({ min: [x0, y0, z0], max: [x1, y1, z1] });
+  const body = box(0, 0, 0, 10, 8, 6);
+  const parts = [box(2, 2, 1, 5, 6, 4), box(0, 0, 0, 2, 2, 2)];
+  const offs = Split.layoutParts(body, parts, 1);
+  assert.equal(offs.length, 2);
+  let cursor = 11; // body max-x + margin
+  for (let i = 0; i < parts.length; i++) {
+    const p = parts[i], o = offs[i];
+    const minX = p.min[0] + o[0], maxX = p.max[0] + o[0];
+    assert.ok(Math.abs(minX - cursor) < 1e-9, "part " + i + " starts at the cursor");
+    // y centers aligned
+    const pcy = (p.min[1] + p.max[1]) / 2 + o[1];
+    assert.ok(Math.abs(pcy - 4) < 1e-9, "part " + i + " y-centered on the body");
+    // bottoms aligned to the body base plane
+    assert.ok(Math.abs(p.min[2] + o[2] - 0) < 1e-9, "part " + i + " rests on the body base");
+    cursor = maxX + 1;
+  }
+});

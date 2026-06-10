@@ -262,6 +262,22 @@
     return col;
   }
 
+  // Row layout for split parts: slots along +X beside the body, y-centered on
+  // it, bottoms aligned to its base plane. Boxes: { min:[x,y,z], max:[x,y,z] }.
+  // Returns one [dx, dy, dz] offset per part box.
+  function layoutParts(bodyBox, partBoxes, margin) {
+    margin = margin || 0;
+    const bcy = (bodyBox.min[1] + bodyBox.max[1]) / 2;
+    let cursor = bodyBox.max[0] + margin;
+    return partBoxes.map((p) => {
+      const dx = cursor - p.min[0];
+      const dy = bcy - (p.min[1] + p.max[1]) / 2;
+      const dz = bodyBox.min[2] - p.min[2];
+      cursor += (p.max[0] - p.min[0]) + margin;
+      return [dx, dy, dz];
+    });
+  }
+
   function uuid() {
     const h = "0123456789abcdef";
     let s = "";
@@ -362,5 +378,5 @@
     return { objectsModel, rootModel, modelSettings };
   }
 
-  global.Split = { solidFromSubs, remainderSolid, majorityBorderColor, buildSplitXML, uuid };
+  global.Split = { solidFromSubs, remainderSolid, majorityBorderColor, buildSplitXML, uuid, layoutParts };
 })(window);
