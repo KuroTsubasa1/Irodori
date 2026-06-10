@@ -15,6 +15,7 @@ function loadModules() {
     "vendor/poly2tri.min.js",
     "js/paint.js",
     "js/cleanup.js",
+    "js/liepa.js",
     "js/caps.js",
     "js/split.js",
     "js/threemf.js",
@@ -30,6 +31,7 @@ function loadModules() {
     THREE: sandbox.THREE,
     poly2tri: sandbox.poly2tri,
     ThreeMF: sandbox.ThreeMF,
+    Liepa: sandbox.Liepa,
     window: sandbox,
   };
 }
