@@ -626,6 +626,8 @@
     restore(current()); buildPalette(); render(null); updateStats(); updateHist();
     $("previewInfo").textContent = "";
     buildObjects();
+    computeModelSize(); // undo can swap the mesh list (plane cuts)
+    updateCutPlane();
   }
   const doUndo = () => jumpTo(histIndex - 1);
   const doRedo = () => jumpTo(histIndex + 1);
