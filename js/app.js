@@ -21,6 +21,8 @@
   let paintState = null; // selected palette color
   let stroke = null; // active brush stroke
   let lastHit = null; // last hovered surface hit (for live cursor)
+  let previewCache = null; // { meshIndex, members:Set<localSub>, globalSubs }
+  function clearSplitPreview() { if (previewCache) { Viewer.clearPreview(); previewCache = null; } }
   let splitParts = []; // [{ meshIndex, subs:Int32Array, state, method }]
   let splitSeq = 0; // stable id per split part (for animation carry-over)
   const claimedByMesh = () => {
@@ -214,7 +216,8 @@
     const paintTool = name === "brush" || name === "ring" || name === "fill";
     $("palette").classList.toggle("hide", !paintTool);
     Viewer.setTool(name === "brush" ? "paint" : (name === "ring" || name === "fill" || name === "split") ? "pick" : "orbit");
-    Viewer.enableHover(name === "brush" || name === "ring");
+    Viewer.enableHover(name === "brush" || name === "ring" || name === "split");
+    if (name !== "split") clearSplitPreview();
     if (doc && (paintTool || name === "split") && doc.meshes.some((m) => !m._sub)) {
       busy("Preparing tool…", () => { for (const m of doc.meshes) Cleanup.buildSubGraph(m); });
     }
@@ -297,6 +300,20 @@
   // it orients to the local feature axis so it wraps ears/tail correctly.
   function onHover(hit) {
     lastHit = hit;
+    if (activeTool === "split") {
+      Viewer.hideCursor();
+      if (!hit || hit.localSub == null) { clearSplitPreview(); return; }
+      if (previewCache && previewCache.meshIndex === hit.meshIndex && previewCache.members.has(hit.localSub)) return;
+      clearSplitPreview();
+      const m = doc.meshes[hit.meshIndex];
+      const subs = Cleanup.selectColorRegion(m, hit.localSub);
+      const members = new Set(subs);
+      const g = [];
+      for (const s of subs) { const gi = Viewer.toGlobalSub(hit.meshIndex, s); if (gi >= 0) g.push(gi); }
+      Viewer.setPreview(g);
+      previewCache = { meshIndex: hit.meshIndex, members, globalSubs: g };
+      return;
+    }
     if (!hit) { Viewer.hideCursor(); return; }
     if (activeTool === "brush") {
       const n = hit.normal;
@@ -321,6 +338,7 @@
   }
   function doSplit(hit) {
     if (previewActive) { restore(current()); previewActive = false; }
+    clearSplitPreview();
     const m = doc.meshes[hit.meshIndex];
     if (hit.localSub == null) return;
     const subs = Cleanup.selectColorRegion(m, hit.localSub);

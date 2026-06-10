@@ -44,6 +44,8 @@
     tmpQ = new THREE.Quaternion();
 
   const HIGHLIGHT = new THREE.Color("#1fe3ff").convertSRGBToLinear();
+  let previewSubs = null; // global sub indices tinted for the split hover preview
+  const PREVIEW = new THREE.Color("#1fe3ff").convertSRGBToLinear();
 
   function init(container) {
     scene = new THREE.Scene();
@@ -184,6 +186,33 @@
         colors[o + k + 2] = col.b;
       }
     }
+    colorAttr.needsUpdate = true;
+  }
+
+  // Tint the given global sub-triangles for the split hover preview.
+  function setPreview(globalSubs) {
+    if (!colorAttr) return;
+    clearPreview();
+    const colors = colorAttr.array;
+    for (const gi of globalSubs) {
+      if (gi < 0) continue;
+      const o = gi * 9;
+      for (let k = 0; k < 9; k += 3) { colors[o + k] = PREVIEW.r; colors[o + k + 1] = PREVIEW.g; colors[o + k + 2] = PREVIEW.b; }
+    }
+    previewSubs = globalSubs;
+    colorAttr.needsUpdate = true;
+  }
+  // Restore the previewed subs to their real state colors.
+  function clearPreview() {
+    if (!colorAttr || !previewSubs) return;
+    const colors = colorAttr.array;
+    for (const gi of previewSubs) {
+      if (gi < 0) continue;
+      const col = linColor(triState[gi]);
+      const o = gi * 9;
+      for (let k = 0; k < 9; k += 3) { colors[o + k] = col.r; colors[o + k + 1] = col.g; colors[o + k + 2] = col.b; }
+    }
+    previewSubs = null;
     colorAttr.needsUpdate = true;
   }
 
@@ -450,6 +479,7 @@
     geom = new THREE.BufferGeometry();
     geom.setAttribute("position", new THREE.BufferAttribute(pos, 3));
     colorAttr = new THREE.BufferAttribute(new Float32Array(usedTris * 9), 3);
+    previewSubs = null;
     geom.setAttribute("color", colorAttr);
     geom.computeVertexNormals();
     geom.computeBoundingSphere();
@@ -515,5 +545,7 @@
     toGlobalSub,
     subTriangleCount: () => totalSub,
     setSplitParts,
+    setPreview,
+    clearPreview,
   };
 })(window);
