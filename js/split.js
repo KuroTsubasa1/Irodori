@@ -65,8 +65,7 @@
       }
     }
 
-    const out = [], outSt = [];
-    for (let t = 0; t < F.length; t += 3) { out.push(F[t], F[t + 1], F[t + 2]); outSt.push(triSt[t / 3]); }
+    const out = F.slice(), outSt = triSt.slice();
 
     // boundary edges (used once); rebuild directed adjacency by walking the cycle
     // so that edges chain head-to-tail for extractLoops (bEdge stores first-seen
@@ -81,6 +80,10 @@
     }
     const boundary = [];
     const bndVisited = new Set();
+    let bndEdgeCount = 0;
+    for (const e of bEdge.values()) { if (e.count === 1) bndEdgeCount++; }
+    let consumedEdgeCount = 0;
+    let boundaryFullyClosed = true;
     for (const start of bndAdj.keys()) {
       if (bndVisited.has(start)) continue;
       const loop = [start]; bndVisited.add(start);
@@ -90,11 +93,21 @@
         if (next === undefined) break;
         bndVisited.add(next); loop.push(next); cur = next;
       }
-      if (loop.length >= 2) for (let i = 0; i < loop.length; i++) boundary.push([loop[i], loop[(i + 1) % loop.length]]);
+      // check that the chain closed back to its start (last vertex rejoins start)
+      const closes = (bndAdj.get(cur) || []).includes(start);
+      if (!closes) boundaryFullyClosed = false;
+      if (loop.length >= 3) {
+        consumedEdgeCount += loop.length;
+        for (let i = 0; i < loop.length; i++) boundary.push([loop[i], loop[(i + 1) % loop.length]]);
+      }
+    }
+    if (!boundaryFullyClosed || consumedEdgeCount !== bndEdgeCount) {
+      console.warn("solidFromSubs: boundary not fully closed (pinch topology); cap may be incomplete");
     }
 
     let cap = { verts: [], extraPts: [], tris: [], method };
     if (boundary.length) {
+      // the walk above already ordered the boundary into consistent directed cycles; extractLoops groups them into per-loop vertex arrays
       const loops = Caps.extractLoops(boundary);
       const getPt = (gid) => [vx[gid], vy[gid], vz[gid]];
       cap = Caps.triangulateLoops(loops, getPt, method);
@@ -106,7 +119,8 @@
       const pl = Caps.bestFitPlane(loopPts);
       let sx = 0, sy = 0, sz = 0;                       // surface centroid (local verts)
       for (let i = 0; i < px.length; i++) { sx += px[i]; sy += py[i]; sz += pz[i]; }
-      sx /= px.length; sy /= py.length; sz /= pz.length;
+      sx /= px.length; sy /= px.length; sz /= px.length;
+      // single best-fit plane for all loops; multi-loop cuts on different planes may need per-loop orientation (rare)
       const dir = [pl.ox - sx, pl.oy - sy, pl.oz - sz];
       if (pl.nx * dir[0] + pl.ny * dir[1] + pl.nz * dir[2] < 0) {
         for (const t of cap.tris) { const tmp = t[1]; t[1] = t[2]; t[2] = tmp; }
