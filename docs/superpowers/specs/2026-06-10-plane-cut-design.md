@@ -47,8 +47,13 @@ normal. Used to color clipped pieces from their parent's paint.
   `Paint.stateAtPoint(parentTree, parentCorners, pieceCentroid)`.
 - **Section loops:** every clipped triangle contributes one chord between its
   two plane-points (edge-intersections keyed by edge, ON-vertices keyed by
-  vid). Chords chain into closed loops (degree-2 walk; pinch → greedy +
-  `console.warn`, as in `extractLoops`).
+  vid). Additionally, when the plane passes through existing mesh edges (both
+  endpoints ON), those edges are tallied from whole-classified triangles and
+  become chords wherever surface exists on both sides — without this the loop
+  can't close when the cut runs through vertices (found by the tilted-cube
+  test: an open pentagon = 5 directed violations). Chords chain into closed
+  loops (degree-2 walk; pinch → greedy + `console.warn`, as in
+  `extractLoops`).
 - **Flat caps:** loops are projected into the plane's basis, classified
   **outer + holes** (signed area + containment, single nesting level — the
   torus/annulus case), and earcut via `THREE.ShapeUtils.triangulateShape`.
