@@ -167,21 +167,23 @@
     const nameFor = (st) => "Filament " + extruderFor(st);
     const objects = [];
 
-    // split parts -> uniform-color solids (no per-triangle paint)
+    // split parts -> uniform-color solids, capped with each part's chosen method
     for (const p of splitParts) {
-      const g = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs));
+      const g = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "earcut");
+      p.cap = p.cap || g.cap; // ensure the remainder can reuse this part's cap
       objects.push({
         name: nameFor(p.state), extruder: extruderFor(p.state),
         positions: g.positions, indices: g.indices, triState: null,
       });
     }
-    // remaining (unclaimed) per mesh -> painted, hole-capped solid
+    // remaining per mesh -> painted, hole-capped solid (reuses parts' reversed caps)
     for (let mi = 0; mi < doc.meshes.length; mi++) {
-      const sub = Cleanup.buildSubGraph(doc.meshes[mi]);
-      const rem = [];
-      for (let s = 0; s < sub.NS; s++) if (!claimed[mi].has(s)) rem.push(s);
-      if (!rem.length) continue;
-      const g = Split.solidFromSubs(doc.meshes[mi], rem);
+      const partsHere = splitParts
+        .filter((p) => p.meshIndex === mi)
+        .map((p) => ({ subs: Array.from(p.subs), cap: p.cap, state: p.state }));
+      if (!partsHere.length && !claimed[mi].size) continue;
+      const g = Split.remainderSolid(doc.meshes[mi], partsHere, claimed[mi]);
+      if (!g.indices.length) continue;
       objects.push({
         name: "Remaining", extruder: doc.defaultExtruder,
         positions: g.positions, indices: g.indices, triState: g.triState,

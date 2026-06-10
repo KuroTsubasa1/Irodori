@@ -104,3 +104,20 @@ test("remainderSolid: reversed cap winding is opposite the part cap", () => {
   // every directed edge appears once (orientable closed surface when merged).
   assert.ok(rem.triState.length > 0);
 });
+
+test("exportSplit-style assembly: parts by method + remainderSolid produce N objects", () => {
+  const { Cleanup, Split } = loadModules();
+  const mesh = makeTetra();
+  const subs = Array.from(regionOfState(Cleanup, mesh, 1));
+  const part = Split.solidFromSubs(mesh, subs, "earcut");
+  const rem = Split.remainderSolid(mesh, [{ subs, cap: part.cap, state: 1 }], new Set(subs));
+  const objects = [
+    { name: "Filament 1", extruder: 1, positions: part.positions, indices: part.indices, triState: null },
+    { name: "Remaining", extruder: 1, positions: rem.positions, indices: rem.indices, triState: rem.triState },
+  ];
+  const xml = Split.buildSplitXML(objects, { buildTransform: "1 0 0 0 1 0 0 0 1 1 2 0", defaultExtruder: 1 });
+  assert.equal((xml.objectsModel.match(/<object /g) || []).length, 2);
+  // both bodies are watertight
+  for (const [, n] of edgeUseCounts(part.indices)) assert.equal(n, 2);
+  for (const [, n] of edgeUseCounts(rem.indices)) assert.equal(n, 2);
+});
