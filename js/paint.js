@@ -206,6 +206,55 @@
     }
   }
 
+  /* State of the leaf containing point P (assumed on the face). Iteratively
+   * descends split nodes using tessellate's exact child geometry (corner
+   * rotation by `special`, midpoints, reversed kid mapping); the containing
+   * child is found by edge-sign tests against the face normal. */
+  function stateAtPoint(node, ax, ay, az, bx, by, bz, cx, cy, cz, px, py, pz) {
+    while (!node.leaf) {
+      const sp = node.special, split = node.split, kids = node.kids;
+      const cs = [ax, ay, az, bx, by, bz, cx, cy, cz];
+      const A = sp * 3, B = ((sp + 1) % 3) * 3, Dd = ((sp + 2) % 3) * 3;
+      const Ax = cs[A], Ay = cs[A + 1], Az = cs[A + 2];
+      const Bx = cs[B], By = cs[B + 1], Bz = cs[B + 2];
+      const Dx = cs[Dd], Dy = cs[Dd + 1], Dz = cs[Dd + 2];
+      const ux = Bx - Ax, uy = By - Ay, uz = Bz - Az;
+      const vx2 = Dx - Ax, vy2 = Dy - Ay, vz2 = Dz - Az;
+      const nx = uy * vz2 - uz * vy2, ny = uz * vx2 - ux * vz2, nz = ux * vy2 - uy * vx2;
+      const tol = -1e-9 * (nx * nx + ny * ny + nz * nz);
+      const edge = (qx, qy, qz, rx, ry, rz) => {
+        const ex = rx - qx, ey = ry - qy, ez = rz - qz, wx = px - qx, wy = py - qy, wz = pz - qz;
+        return (ey * wz - ez * wy) * nx + (ez * wx - ex * wz) * ny + (ex * wy - ey * wx) * nz;
+      };
+      const inside = (x0, y0, z0, x1, y1, z1, x2, y2, z2) =>
+        edge(x0, y0, z0, x1, y1, z1) >= tol && edge(x1, y1, z1, x2, y2, z2) >= tol && edge(x2, y2, z2, x0, y0, z0) >= tol;
+      const k = (g) => kids[split - g];
+      let nd, c = null;
+      if (split === 1) {
+        const mx = (Bx + Dx) / 2, my = (By + Dy) / 2, mz = (Bz + Dz) / 2;
+        if (inside(Ax, Ay, Az, Bx, By, Bz, mx, my, mz)) { nd = k(0); c = [Ax, Ay, Az, Bx, By, Bz, mx, my, mz]; }
+        else { nd = k(1); c = [mx, my, mz, Dx, Dy, Dz, Ax, Ay, Az]; }
+      } else if (split === 2) {
+        const m1x = (Ax + Bx) / 2, m1y = (Ay + By) / 2, m1z = (Az + Bz) / 2;
+        const m2x = (Ax + Dx) / 2, m2y = (Ay + Dy) / 2, m2z = (Az + Dz) / 2;
+        if (inside(Ax, Ay, Az, m1x, m1y, m1z, m2x, m2y, m2z)) { nd = k(0); c = [Ax, Ay, Az, m1x, m1y, m1z, m2x, m2y, m2z]; }
+        else if (inside(m1x, m1y, m1z, Bx, By, Bz, m2x, m2y, m2z)) { nd = k(1); c = [m1x, m1y, m1z, Bx, By, Bz, m2x, m2y, m2z]; }
+        else { nd = k(2); c = [Bx, By, Bz, Dx, Dy, Dz, m2x, m2y, m2z]; }
+      } else {
+        const m1x = (Ax + Bx) / 2, m1y = (Ay + By) / 2, m1z = (Az + Bz) / 2;
+        const m2x = (Bx + Dx) / 2, m2y = (By + Dy) / 2, m2z = (Bz + Dz) / 2;
+        const m3x = (Ax + Dx) / 2, m3y = (Ay + Dy) / 2, m3z = (Az + Dz) / 2;
+        if (inside(Ax, Ay, Az, m1x, m1y, m1z, m3x, m3y, m3z)) { nd = k(0); c = [Ax, Ay, Az, m1x, m1y, m1z, m3x, m3y, m3z]; }
+        else if (inside(m1x, m1y, m1z, Bx, By, Bz, m2x, m2y, m2z)) { nd = k(1); c = [m1x, m1y, m1z, Bx, By, Bz, m2x, m2y, m2z]; }
+        else if (inside(m2x, m2y, m2z, Dx, Dy, Dz, m3x, m3y, m3z)) { nd = k(2); c = [m2x, m2y, m2z, Dx, Dy, Dz, m3x, m3y, m3z]; }
+        else { nd = k(3); c = [m1x, m1y, m1z, m2x, m2y, m2z, m3x, m3y, m3z]; }
+      }
+      node = nd;
+      ax = c[0]; ay = c[1]; az = c[2]; bx = c[3]; by = c[4]; bz = c[5]; cx = c[6]; cy = c[7]; cz = c[8];
+    }
+    return node.state;
+  }
+
   // If a split face now has all leaves of the same state, collapse to a solid
   // leaf (smaller, cleaner export).
   function collapseIfUniform(node) {
@@ -236,6 +285,7 @@
     addLeafCounts,
     leafCount,
     tessellate,
+    stateAtPoint,
     remapLeaves,
     collapseIfUniform,
     collapseDeep,
