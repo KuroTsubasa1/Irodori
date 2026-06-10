@@ -481,6 +481,7 @@
   }
   function doReset() {
     if (!doc) return;
+    if (isolated) { isolated = null; Viewer.setVisibleMeshes(null); }
     clearSplitPreview();
     restore(history[0].state);
     previewActive = false;
@@ -488,13 +489,16 @@
     render(null); updateStats();
     $("previewInfo").textContent = "";
     toast("Reverted to original");
+    buildObjects();
   }
   function jumpTo(idx) {
     if (!doc || idx < 0 || idx >= history.length) return;
+    if (isolated) { isolated = null; Viewer.setVisibleMeshes(null); }
     clearSplitPreview();
     previewActive = false; histIndex = idx;
     restore(current()); render(null); updateStats(); updateHist();
     $("previewInfo").textContent = "";
+    buildObjects();
   }
   const doUndo = () => jumpTo(histIndex - 1);
   const doRedo = () => jumpTo(histIndex + 1);

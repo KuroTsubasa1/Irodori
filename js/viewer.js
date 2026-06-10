@@ -465,7 +465,10 @@
       const P = m.positions;
       const { solid, trees } = meshTrees[mi];
       meshSubOffset[mi] = t;
-      if (visibleMeshes && !visibleMeshes.has(mi)) { continue; }
+      if (visibleMeshes && !visibleMeshes.has(mi)) {
+        for (let i = 0; i < m.nf; i++) { faceStart[gf] = t; gf += 1; } // keep faceStart globally indexed
+        continue;
+      }
       let origLocal = 0; // original leaf index within this mesh (claimed + unclaimed)
       const claimedSet = claimedSets[mi] || new Set();
       for (let i = 0; i < m.nf; i++) {
