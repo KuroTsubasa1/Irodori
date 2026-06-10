@@ -511,6 +511,7 @@
   function doCut(keep) {
     if (!doc) return;
     if (splitParts.length) { toast("Export or undo your split parts before cutting", true); return; }
+    if (previewActive) { restore(current()); previewActive = false; }
     clearHoverPreview();
     const plane = cutPlane();
     const targets = isolated && isolated.kind === "mesh" ? new Set([isolated.index]) : null;

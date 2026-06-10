@@ -66,6 +66,44 @@ test("cutMesh: a tilted cut still yields watertight halves summing to the source
   assert.ok(Math.abs(sum - 8) < 1e-6, "volumes sum to the cube (8), got " + sum.toFixed(4));
 });
 
+// Hollow square tube (outer 4x4, inner 2x2, z in [0,2], annular ends): cutting
+// it produces an outer-loop + hole section — the spec's single-level nesting.
+function makeHollowBox() {
+  const O = [[0, 0], [4, 0], [4, 4], [0, 4]];
+  const I = [[1, 1], [3, 1], [3, 3], [1, 3]];
+  const pos = [];
+  for (const [x, y] of O) pos.push(x, y, 0);
+  for (const [x, y] of I) pos.push(x, y, 0);
+  for (const [x, y] of O) pos.push(x, y, 2);
+  for (const [x, y] of I) pos.push(x, y, 2);
+  const v1 = [], v2 = [], v3 = [];
+  const quad = (a, b, c, d) => { v1.push(a, a); v2.push(b, c); v3.push(c, d); };
+  for (let i = 0; i < 4; i++) { const a = i, b = (i + 1) % 4; quad(a, b, b + 8, a + 8); } // outer walls
+  for (let i = 0; i < 4; i++) { const a = i + 4, b = ((i + 1) % 4) + 4; quad(b, a, a + 8, b + 8); } // inner walls
+  for (let i = 0; i < 4; i++) { const oa = i, ob = (i + 1) % 4; quad(ob, oa, oa + 4, ob + 4); } // bottom annulus (-z)
+  for (let i = 0; i < 4; i++) { const oa = i + 8, ob = ((i + 1) % 4) + 8; quad(oa, ob, ob + 4, oa + 4); } // top annulus (+z)
+  return {
+    nf: v1.length,
+    positions: new Float32Array(pos),
+    v1: Int32Array.from(v1), v2: Int32Array.from(v2), v3: Int32Array.from(v3),
+    paints: new Array(v1.length).fill("4"),
+  };
+}
+
+test("cutMesh: annular sections cap as outer + hole (single-level nesting)", () => {
+  const { PlaneCut } = loadModules();
+  const tube = makeHollowBox();
+  assert.equal(directedViolations(asIndices(tube)), 0, "fixture sanity");
+  assert.ok(Math.abs(signedVolume(asIndices(tube), tube.positions) - 24) < 1e-6, "fixture volume 24");
+  const { above, below } = PlaneCut.cutMesh(tube, { px: 0, py: 0, pz: 1, nx: 0, ny: 0, nz: 1 });
+  assert.ok(above && below);
+  for (const [name, h] of [["above", above], ["below", below]]) {
+    assert.equal(directedViolations(asIndices(h)), 0, name + " directed-watertight");
+    const vol = signedVolume(asIndices(h), h.positions);
+    assert.ok(Math.abs(vol - 12) < 1e-6, name + " annular volume 12, got " + vol.toFixed(3));
+  }
+});
+
 test("cutMesh: clipped pieces inherit the parent's paint at their centroid", () => {
   const { PlaneCut } = loadModules();
   const cube = makeClosedCube();
