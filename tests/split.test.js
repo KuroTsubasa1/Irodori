@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { loadModules, makeTetra, edgeUseCounts, makeTJunction, makeOpenTube } = require("./harness");
+const { loadModules, makeTetra, edgeUseCounts, makeTJunction, makeOpenTube, directedViolations, signedVolume } = require("./harness");
 
 function regionOfState(Cleanup, mesh, state) {
   const g = Cleanup.buildSubGraph(mesh);
@@ -134,4 +134,16 @@ test("exportSplit-style assembly: parts by method + remainderSolid produce N obj
   // both bodies are watertight
   for (const [, n] of edgeUseCounts(part.indices)) assert.equal(n, 2);
   for (const [, n] of edgeUseCounts(rem.indices)) assert.equal(n, 2);
+});
+
+test("tube solids are directed-watertight with positive volume (all methods)", () => {
+  const { Cleanup, Split } = loadModules();
+  for (const method of ["centroid", "projected", "earcut", "cdt", "liepa"]) {
+    const tube = makeOpenTube();
+    const g = Cleanup.buildSubGraph(tube);
+    const solid = Split.solidFromSubs(tube, [...Array(g.NS).keys()], method);
+    assert.equal(directedViolations(solid.indices), 0, method + ": every edge traversed once each way");
+    const vol = signedVolume(solid.indices, solid.positions);
+    assert.ok(vol > 7.9 && vol < 8.1, method + ": volume ~8 (2x2x2 tube), got " + vol.toFixed(2));
+  }
 });

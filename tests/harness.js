@@ -137,4 +137,35 @@ function makeBigTriangle() {
   };
 }
 
-module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeBigTriangle };
+// Directed watertight check: a consistently-oriented closed mesh traverses
+// every undirected edge exactly once in each direction. Returns the number of
+// violating undirected edges.
+function directedViolations(indices) {
+  const dir = new Map(), und = new Set();
+  for (let t = 0; t < indices.length; t += 3) {
+    for (const [u, v] of [[indices[t], indices[t + 1]], [indices[t + 1], indices[t + 2]], [indices[t + 2], indices[t]]]) {
+      dir.set(u + ">" + v, (dir.get(u + ">" + v) || 0) + 1);
+      und.add(u < v ? u + "_" + v : v + "_" + u);
+    }
+  }
+  let bad = 0;
+  for (const k of und) {
+    const [a, b] = k.split("_").map(Number);
+    if ((dir.get(a + ">" + b) || 0) !== 1 || (dir.get(b + ">" + a) || 0) !== 1) bad++;
+  }
+  return bad;
+}
+
+// Signed volume of a closed triangle mesh (positive when outward-oriented).
+function signedVolume(indices, positions) {
+  let v6 = 0;
+  for (let t = 0; t < indices.length; t += 3) {
+    const a = indices[t] * 3, b = indices[t + 1] * 3, c = indices[t + 2] * 3;
+    v6 += positions[a] * (positions[b + 1] * positions[c + 2] - positions[b + 2] * positions[c + 1])
+        - positions[a + 1] * (positions[b] * positions[c + 2] - positions[b + 2] * positions[c])
+        + positions[a + 2] * (positions[b] * positions[c + 1] - positions[b + 1] * positions[c]);
+  }
+  return v6 / 6;
+}
+
+module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeBigTriangle, directedViolations, signedVolume };

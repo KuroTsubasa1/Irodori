@@ -112,19 +112,12 @@
       const getPt = (gid) => [vx[gid], vy[gid], vz[gid]];
       cap = Caps.triangulateLoops(loops, getPt, method);
       cap.method = method;
-      // orient part-outward: flip if the loops' plane normal points toward the
-      // surface interior (so cap normals face away from the part centroid).
-      const loopPts = [];
-      for (const loop of loops) for (const v of loop) loopPts.push(getPt(v));
-      const pl = Caps.bestFitPlane(loopPts);
-      let sx = 0, sy = 0, sz = 0;                       // surface centroid (local verts)
-      for (let i = 0; i < px.length; i++) { sx += px[i]; sy += py[i]; sz += pz[i]; }
-      sx /= px.length; sy /= px.length; sz /= px.length;
-      // single best-fit plane for all loops; multi-loop cuts on different planes may need per-loop orientation (rare)
-      const dir = [pl.ox - sx, pl.oy - sy, pl.oz - sz];
-      if (pl.nx * dir[0] + pl.ny * dir[1] + pl.nz * dir[2] < 0) {
-        for (const t of cap.tris) { const tmp = t[1]; t[1] = t[2]; t[2] = tmp; }
-      }
+      // orient each cap COMPONENT exactly against the surface's boundary
+      // winding (replaces the global best-fit-plane heuristic, which inverted
+      // caps on multi-loop parts whose rims face opposite directions)
+      const surfDir = new Map();
+      for (const e of bEdge.values()) if (e.count === 1) surfDir.set(ekeyG(e.u, e.v), e.u + ">" + e.v);
+      orientCapComponents(cap, surfDir);
       // emit the cap into the part: loop verts weld via lid(); extras append locally
       const capLocal = cap.verts.map((gid) => lid(gid));
       const extraBase = px.length;
@@ -143,6 +136,49 @@
       state: subs.length ? subLeaf[subs[0]].state : 0,
       cap, // { verts:globalVids, extraPts, tris (part-outward), method }
     };
+  }
+
+  // Exact cap orientation: an orientable closed solid traverses every rim edge
+  // once in each direction, and the SURFACE's direction is known (bEdge
+  // first-seen = surface winding). Majority-vote each connected cap component's
+  // rim-edge directions against surfDir and flip components that agree instead
+  // of oppose. cap.tris reference cap.verts (global vids) for i < verts.length.
+  function orientCapComponents(cap, surfDir) {
+    const nT = cap.tris.length;
+    if (!nT) return;
+    // union-find over triangles sharing any ref
+    const parent = new Int32Array(nT);
+    for (let i = 0; i < nT; i++) parent[i] = i;
+    const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    const refOwner = new Map();
+    cap.tris.forEach((t, ti) => {
+      for (const r of t) {
+        const o = refOwner.get(r);
+        if (o === undefined) refOwner.set(r, ti);
+        else { const a = find(o), b = find(ti); if (a !== b) parent[a] = b; }
+      }
+    });
+    const ek = (a, b) => (a < b ? a + "_" + b : b + "_" + a);
+    const agree = new Map(), oppose = new Map();
+    cap.tris.forEach((t, ti) => {
+      const root = find(ti);
+      for (let i = 0; i < 3; i++) {
+        const x = t[i], y = t[(i + 1) % 3];
+        if (x >= cap.verts.length || y >= cap.verts.length) continue; // extras: never rim
+        const u = cap.verts[x], v = cap.verts[y];
+        const sd = surfDir.get(ek(u, v));
+        if (!sd) continue; // a diagonal between rim vids, not a rim edge
+        if (sd === u + ">" + v) agree.set(root, (agree.get(root) || 0) + 1);
+        else oppose.set(root, (oppose.get(root) || 0) + 1);
+      }
+    });
+    const flip = new Set();
+    for (const root of new Set([...agree.keys(), ...oppose.keys()])) {
+      const a = agree.get(root) || 0, o = oppose.get(root) || 0;
+      if (a > o) flip.add(root);
+      else if (a === o && a > 0) console.warn("solidFromSubs: ambiguous cap orientation; leaving component as-is");
+    }
+    if (flip.size) cap.tris.forEach((t, ti) => { if (flip.has(find(ti))) { const tmp = t[1]; t[1] = t[2]; t[2] = tmp; } });
   }
 
   // Build the remaining mesh (sub-triangles NOT in any part) as a watertight
