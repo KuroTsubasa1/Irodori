@@ -48,7 +48,7 @@
   function snap() {
     return {
       meshes: doc.meshes.map((m) => ({ paints: m.paints.slice(), dom: Int32Array.from(m.dom) })),
-      splits: splitParts.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method })),
+      splits: splitParts.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method, thickness: p.thickness })),
       filaments: doc.filaments.map((f) => ({ index: f.index, hex: f.hex })),
       meshList: doc.meshes.slice(),
       synthetic: !!doc.synthetic,
@@ -63,7 +63,7 @@
       Cleanup.invalidateSub(m);
     });
     if (state.filaments) doc.filaments = state.filaments.map((f) => ({ index: f.index, hex: f.hex }));
-    splitParts = state.splits.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method }));
+    splitParts = state.splits.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method, thickness: p.thickness }));
   }
   const current = () => history[histIndex].state;
   function pushHistory(label, stateClone) {
@@ -479,7 +479,7 @@
     if (hit.localSub == null) return;
     const subs = Cleanup.selectColorRegion(m, hit.localSub, claimedByMesh()[hit.meshIndex]);
     if (!subs.length) { toast("Nothing to split there", true); return; }
-    splitParts.push({ id: splitSeq++, meshIndex: hit.meshIndex, subs, state: hit.state, method: $("capMethod").value });
+    splitParts.push({ id: splitSeq++, meshIndex: hit.meshIndex, subs, state: hit.state, method: $("capMethod").value, thickness: +$("splitThick").value });
     pushHistory("Split");
     render(null);
     buildObjects();
@@ -707,6 +707,15 @@
     pushHistory("Cap method: " + method);
     render(null);
     toast("Re-capped " + splitParts.length + " part(s) with " + method);
+  });
+  $("splitThick").addEventListener("input", () => { $("splitThickVal").textContent = (+$("splitThick").value).toFixed(1) + " mm"; });
+  $("splitThick").addEventListener("change", () => {
+    if (!doc || !splitParts.length) return;
+    const t = +$("splitThick").value;
+    for (const p of splitParts) p.thickness = t;
+    pushHistory("Thickness: " + t.toFixed(1) + " mm");
+    render(null);
+    toast("Re-built " + splitParts.length + " part(s) at " + t.toFixed(1) + " mm");
   });
   $("reframeBtn").addEventListener("click", () => Viewer.frame());
   $("bgToggle").addEventListener("click", () => $("stage").classList.toggle("dark"));

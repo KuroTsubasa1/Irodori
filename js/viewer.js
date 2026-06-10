@@ -337,8 +337,6 @@
     return c;
   }
 
-  const EXPLODE_K = 0.8;
-
   function clearSplitObjs() {
     for (const o of splitObjs) { root.remove(o.mesh); o.mesh.geometry.dispose(); o.mesh.material.dispose(); }
     splitObjs = [];
@@ -430,34 +428,39 @@
     if (!geom || !parts || !parts.length) return;
     const c = geom.boundingSphere ? geom.boundingSphere.center : new THREE.Vector3();
     const r = geom.boundingSphere ? geom.boundingSphere.radius || 50 : 50;
+    const built = [];
     for (const p of parts) {
-      const s = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "liepa");
+      const s = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "liepa", p.thickness || 0);
       const gg = new THREE.BufferGeometry();
       gg.setAttribute("position", new THREE.BufferAttribute(s.positions, 3));
       gg.setIndex(new THREE.BufferAttribute(s.indices, 1));
       gg.computeVertexNormals();
       gg.computeBoundingSphere();
+      gg.computeBoundingBox();
       const mat = new THREE.MeshStandardMaterial({
         color: linColor(p.state).clone(), roughness: 0.75, metalness: 0.0,
       });
-      const mesh = new THREE.Mesh(gg, mat);
-      const pc = gg.boundingSphere.center;
-      // proportional exploded view (pairs separate by ×(1+K)), floored so the
-      // part's bounding sphere CLEARS the model's bounding sphere along its
-      // ray — near-axis parts (neck rings) pop past the head, not into it
-      const off = new THREE.Vector3().subVectors(pc, c);
-      const d = off.length();
-      if (d < 1e-6) off.set(0, 0, 1); else off.divideScalar(d);
-      const partR = gg.boundingSphere.radius || 1;
-      const dist = Math.max(EXPLODE_K * d, r + 1.05 * partR + 0.05 * r - d);
-      const target = off.multiplyScalar(dist);
+      built.push({ p, s, mesh: new THREE.Mesh(gg, mat) });
+    }
+    // row layout beside the body: parts slot along +X on the base plane
+    if (!geom.boundingBox) geom.computeBoundingBox();
+    const bb = geom.boundingBox;
+    const bodyBox = { min: [bb.min.x, bb.min.y, bb.min.z], max: [bb.max.x, bb.max.y, bb.max.z] };
+    const margin = 0.06 * (geom.boundingSphere ? 2 * (geom.boundingSphere.radius || 50) : 50);
+    const partBoxes = built.map(({ mesh }) => {
+      const b = mesh.geometry.boundingBox;
+      return { min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] };
+    });
+    const offs = Split.layoutParts(bodyBox, partBoxes, margin);
+    built.forEach(({ p, s, mesh }, i) => {
+      const target = new THREE.Vector3(offs[i][0], offs[i][1], offs[i][2]);
       root.add(mesh);
       const cur = prevById.get(p.id) || new THREE.Vector3();
       mesh.position.copy(cur);
       splitObjs.push({ id: p.id, mesh, target, cur });
       const capMesh = capMeshFor(p, s);
       if (capMesh) { root.add(capMesh); remainderCapObjs.push(capMesh); }
-    }
+    });
   }
 
   // (Re)build the sub-triangle geometry from each mesh's current paints.
