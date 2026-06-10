@@ -1,0 +1,66 @@
+// Loads the browser IIFE modules into a Node vm sandbox (window-shimmed) and
+// returns their globals, plus small mesh fixtures for tests.
+const vm = require("node:vm");
+const fs = require("node:fs");
+const path = require("node:path");
+
+function loadModules() {
+  const sandbox = {};
+  sandbox.window = sandbox;
+  sandbox.console = console;
+  vm.createContext(sandbox);
+  for (const f of ["js/paint.js", "js/cleanup.js", "js/split.js"]) {
+    const code = fs.readFileSync(path.join(__dirname, "..", f), "utf8");
+    vm.runInContext(code, sandbox, { filename: f });
+  }
+  return {
+    Paint: sandbox.Paint,
+    Cleanup: sandbox.Cleanup,
+    Split: sandbox.Split,
+    window: sandbox,
+  };
+}
+
+// Unit tetrahedron: faces 0,1,2 painted state 1 ("4"); face 3 painted state 2 ("8").
+// State-1 faces are mutually edge-connected -> one color region of 3 sub-triangles.
+function makeTetra() {
+  return {
+    nf: 4,
+    positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1]),
+    v1: Int32Array.from([0, 0, 0, 1]),
+    v2: Int32Array.from([1, 1, 2, 2]),
+    v3: Int32Array.from([2, 3, 3, 3]),
+    paints: ["4", "4", "4", "8"],
+  };
+}
+
+// Count how many times each undirected edge is used across an index buffer.
+// Watertight (closed, manifold) <=> every edge used exactly twice.
+function edgeUseCounts(indices) {
+  const m = new Map();
+  const key = (a, b) => (a < b ? a + "_" + b : b + "_" + a);
+  for (let t = 0; t < indices.length; t += 3) {
+    const a = indices[t], b = indices[t + 1], c = indices[t + 2];
+    for (const [u, v] of [[a, b], [b, c], [c, a]]) {
+      const k = key(u, v);
+      m.set(k, (m.get(k) || 0) + 1);
+    }
+  }
+  return m;
+}
+
+// Two faces sharing edge vA-vB. Face 1 is painted with a 1-way split ("441")
+// whose tessellation puts a midpoint M at mid(vA,vB) -> a T-junction with the
+// solid face 0. Both faces are filament state 1 -> a single 3-sub region.
+function makeTJunction() {
+  return {
+    nf: 2,
+    positions: new Float32Array([0,0,0, 2,0,0, 1,1,0, 1,-1,0]), // vA,vB,vC,vX
+    v1: Int32Array.from([0, 3]),
+    v2: Int32Array.from([1, 0]),
+    v3: Int32Array.from([2, 1]),
+    paints: ["4", "441"],
+  };
+}
+
+module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction };

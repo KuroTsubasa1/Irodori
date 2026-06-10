@@ -144,7 +144,10 @@
       list[cur[b]++] = a;
     }
 
-    mesh._sub = { start, list, subLeaf, subFace, trees, cen, NS };
+    mesh._sub = {
+      start, list, subLeaf, subFace, trees, cen, NS,
+      sv, vx: cx, vy: cy, vz: cz, NV, midOf,
+    };
     return mesh._sub;
   }
 
@@ -473,6 +476,31 @@
     return sizes;
   }
 
+  // Flood the connected same-color region containing seedSub. Returns the
+  // member sub-triangle indices (Int32Array).
+  function selectColorRegion(mesh, seedSub) {
+    const g = buildSubGraph(mesh);
+    const { start, list, subLeaf, NS } = g;
+    if (seedSub < 0 || seedSub >= NS) return new Int32Array(0);
+    const st = subLeaf[seedSub].state;
+    const seen = new Uint8Array(NS);
+    const out = [];
+    const stk = [seedSub];
+    seen[seedSub] = 1;
+    while (stk.length) {
+      const u = stk.pop();
+      out.push(u);
+      for (let e = start[u]; e < start[u + 1]; e++) {
+        const v = list[e];
+        if (!seen[v] && subLeaf[v].state === st) {
+          seen[v] = 1;
+          stk.push(v);
+        }
+      }
+    }
+    return Int32Array.from(out);
+  }
+
   global.Cleanup = {
     computeDominant,
     buildSubGraph,
@@ -485,5 +513,6 @@
     applyStates,
     subSizes,
     invalidateSub,
+    selectColorRegion,
   };
 })(window);

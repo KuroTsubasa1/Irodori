@@ -19,6 +19,10 @@
   let meshFaceOffset = []; // global face offset per mesh
   let meshSubOffset = []; // global sub-triangle offset per mesh (+sentinel)
   let totalSub = 0;
+  let renderMap = [];    // per mesh: rendered-sub index -> original localSub
+  let origToRender = []; // per mesh: Map<original localSub, rendered-sub index>
+  let splitObjs = [];    // [{ mesh, target:THREE.Vector3, cur:THREE.Vector3 }]
+  let claimedSets = [];  // per mesh: Set<localSub> hidden from the main mesh
 
   // picking
   let raycaster, mouse;
@@ -137,8 +141,14 @@
   function onPaint(handlers) {
     paintCb = handlers;
   }
+  // Map an original (graph) sub index to its rendered slot. Returns -1 when the
+  // sub is claimed by a split part (not present in the main mesh), so callers
+  // that recolor live (paintSubs) skip it.
   function toGlobalSub(meshIndex, localSub) {
-    return meshSubOffset[meshIndex] + localSub;
+    const map = origToRender[meshIndex];
+    if (!map) return -1;
+    const r = map.get(localSub);
+    return r === undefined ? -1 : meshSubOffset[meshIndex] + r;
   }
   // Live recolor of specific sub-triangles (no rebuild) — used while brushing.
   function paintSubs(globalSubs, state) {
@@ -146,7 +156,9 @@
     const col = linColor(state);
     const colors = colorAttr.array;
     for (let i = 0; i < globalSubs.length; i++) {
-      const o = globalSubs[i] * 9;
+      const gi = globalSubs[i];
+      if (gi < 0) continue; // claimed-by-split sub: not in the main mesh
+      const o = gi * 9;
       for (let k = 0; k < 9; k += 3) {
         colors[o + k] = col.r;
         colors[o + k + 1] = col.g;
@@ -168,9 +180,10 @@
     const gsub = hits[0].faceIndex; // one geometry triangle == one sub-triangle
     let mi = 0;
     while (mi + 2 < meshSubOffset.length && meshSubOffset[mi + 1] <= gsub) mi++;
+    const renderedLocal = gsub - meshSubOffset[mi];
     return {
       meshIndex: mi,
-      localSub: gsub - meshSubOffset[mi],
+      localSub: renderMap[mi][renderedLocal],
       state: triState[gsub],
       point: hits[0].point,
       normal: hits[0].face ? hits[0].face.normal : ZUP,
@@ -231,6 +244,10 @@
   function animate() {
     requestAnimationFrame(animate);
     controls.update();
+    for (const o of splitObjs) {
+      o.cur.lerp(o.target, 0.15);
+      o.mesh.position.copy(o.cur);
+    }
     renderer.render(scene, camera);
   }
 
@@ -249,10 +266,48 @@
     return c;
   }
 
+  const EXPLODE_K = 0.45;
+
+  function clearSplitObjs() {
+    for (const o of splitObjs) { root.remove(o.mesh); o.mesh.geometry.dispose(); o.mesh.material.dispose(); }
+    splitObjs = [];
+  }
+
+  // parts: [{ meshIndex, subs, state }]
+  function setSplitParts(parts) {
+    clearSplitObjs();
+    if (!geom || !parts || !parts.length) return;
+    const c = geom.boundingSphere ? geom.boundingSphere.center : new THREE.Vector3();
+    const r = geom.boundingSphere ? geom.boundingSphere.radius || 50 : 50;
+    for (const p of parts) {
+      const s = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs));
+      const gg = new THREE.BufferGeometry();
+      gg.setAttribute("position", new THREE.BufferAttribute(s.positions, 3));
+      gg.setIndex(new THREE.BufferAttribute(s.indices, 1));
+      gg.computeVertexNormals();
+      gg.computeBoundingSphere();
+      const mat = new THREE.MeshStandardMaterial({
+        color: linColor(p.state).clone(), roughness: 0.75, metalness: 0.0,
+      });
+      const mesh = new THREE.Mesh(gg, mat);
+      const pc = gg.boundingSphere.center;
+      const dir = new THREE.Vector3().subVectors(pc, c);
+      if (dir.lengthSq() < 1e-9) dir.set(0, 0, 1);
+      dir.normalize();
+      const target = dir.multiplyScalar(r * EXPLODE_K);
+      root.add(mesh);
+      splitObjs.push({ mesh, target, cur: new THREE.Vector3() });
+    }
+  }
+
   // (Re)build the sub-triangle geometry from each mesh's current paints.
-  function build(d) {
+  function build(d, claimed) {
     doc = d;
     stateColorCache = {};
+    if (!claimed) claimedSets = d.meshes.map(() => new Set());
+    else claimedSets = claimed;
+    renderMap = d.meshes.map(() => []);
+    origToRender = d.meshes.map(() => new Map());
 
     // count total faces and sub-triangles; cache per-face solid/tree
     let totalFaces = 0;
@@ -262,7 +317,6 @@
     totalSub = 0;
     for (const m of doc.meshes) {
       meshFaceOffset.push(totalFaces);
-      meshSubOffset.push(totalSub);
       totalFaces += m.nf;
       const solid = new Int32Array(m.nf);
       const trees = new Array(m.nf);
@@ -281,7 +335,6 @@
       }
       meshTrees.push({ solid, trees });
     }
-    meshSubOffset.push(totalSub); // sentinel
 
     const positions = new Float32Array(totalSub * 9);
     triState = new Int32Array(totalSub);
@@ -294,44 +347,48 @@
       const m = doc.meshes[mi];
       const P = m.positions;
       const { solid, trees } = meshTrees[mi];
+      meshSubOffset[mi] = t;
+      let origLocal = 0; // original leaf index within this mesh (claimed + unclaimed)
+      const claimedSet = claimedSets[mi] || new Set();
       for (let i = 0; i < m.nf; i++) {
         faceStart[gf] = t;
-        const a = m.v1[i] * 3,
-          b = m.v2[i] * 3,
-          c = m.v3[i] * 3;
+        const a = m.v1[i] * 3, b = m.v2[i] * 3, c = m.v3[i] * 3;
         const ax = P[a], ay = P[a + 1], az = P[a + 2];
         const bx = P[b], by = P[b + 1], bz = P[b + 2];
         const cx = P[c], cy = P[c + 1], cz = P[c + 2];
-        if (solid[i] >= 0) {
-          positions[off] = ax; positions[off + 1] = ay; positions[off + 2] = az;
-          positions[off + 3] = bx; positions[off + 4] = by; positions[off + 5] = bz;
-          positions[off + 6] = cx; positions[off + 7] = cy; positions[off + 8] = cz;
-          triState[t] = solid[i];
+        const emitLeaf = (state, x0,y0,z0,x1,y1,z1,x2,y2,z2) => {
+          const mine = origLocal; origLocal++;
+          if (claimedSet.has(mine)) return;        // hidden: this part lifted out
+          positions[off] = x0; positions[off+1] = y0; positions[off+2] = z0;
+          positions[off+3] = x1; positions[off+4] = y1; positions[off+5] = z1;
+          positions[off+6] = x2; positions[off+7] = y2; positions[off+8] = z2;
+          triState[t] = state;
+          origToRender[mi].set(mine, renderMap[mi].length);
+          renderMap[mi].push(mine);
           off += 9; t += 1;
+        };
+        if (solid[i] >= 0) {
+          emitLeaf(solid[i], ax,ay,az, bx,by,bz, cx,cy,cz);
         } else {
-          Paint.tessellate(
-            trees[i], ax, ay, az, bx, by, bz, cx, cy, cz,
-            (leaf, x0, y0, z0, x1, y1, z1, x2, y2, z2) => {
-              positions[off] = x0; positions[off + 1] = y0; positions[off + 2] = z0;
-              positions[off + 3] = x1; positions[off + 4] = y1; positions[off + 5] = z1;
-              positions[off + 6] = x2; positions[off + 7] = y2; positions[off + 8] = z2;
-              triState[t] = leaf.state;
-              off += 9; t += 1;
-            }
-          );
+          Paint.tessellate(trees[i], ax,ay,az, bx,by,bz, cx,cy,cz,
+            (leaf, x0,y0,z0,x1,y1,z1,x2,y2,z2) =>
+              emitLeaf(leaf.state, x0,y0,z0,x1,y1,z1,x2,y2,z2));
         }
         gf += 1;
       }
     }
+    meshSubOffset.push(t); // sentinel (rendered count)
     faceStart[totalFaces] = t;
 
     if (geom) {
       root.remove(meshObj);
       geom.dispose();
     }
+    const usedTris = t;
+    const pos = positions.subarray(0, usedTris * 9);
     geom = new THREE.BufferGeometry();
-    geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    colorAttr = new THREE.BufferAttribute(new Float32Array(totalSub * 9), 3);
+    geom.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    colorAttr = new THREE.BufferAttribute(new Float32Array(usedTris * 9), 3);
     geom.setAttribute("color", colorAttr);
     geom.computeVertexNormals();
     geom.computeBoundingSphere();
@@ -396,5 +453,6 @@
     paintSubs,
     toGlobalSub,
     subTriangleCount: () => totalSub,
+    setSplitParts,
   };
 })(window);

@@ -21,6 +21,17 @@
   let paintState = null; // selected palette color
   let stroke = null; // active brush stroke
   let lastHit = null; // last hovered surface hit (for live cursor)
+  let splitParts = []; // [{ meshIndex, subs:Int32Array, state }]
+  const claimedByMesh = () => {
+    const sets = doc.meshes.map(() => new Set());
+    for (const p of splitParts) for (const s of p.subs) sets[p.meshIndex].add(s);
+    return sets;
+  };
+  function rebuildView(highlightSet) {
+    Viewer.build(doc, claimedByMesh());
+    Viewer.setSplitParts(splitParts);
+    if (highlightSet) Viewer.setHighlight(highlightSet);
+  }
 
   // island-size control (log slider + number)
   const SIZE_MAX = 50000;
@@ -30,14 +41,18 @@
 
   // ---------- snapshots / history ----------
   function snap() {
-    return doc.meshes.map((m) => ({ paints: m.paints.slice(), dom: Int32Array.from(m.dom) }));
+    return {
+      meshes: doc.meshes.map((m) => ({ paints: m.paints.slice(), dom: Int32Array.from(m.dom) })),
+      splits: splitParts.map((p) => ({ meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state })),
+    };
   }
   function restore(state) {
     doc.meshes.forEach((m, i) => {
-      m.paints = state[i].paints.slice();
-      m.dom = Int32Array.from(state[i].dom);
+      m.paints = state.meshes[i].paints.slice();
+      m.dom = Int32Array.from(state.meshes[i].dom);
       Cleanup.invalidateSub(m);
     });
+    splitParts = state.splits.map((p) => ({ meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state }));
   }
   const current = () => history[histIndex].state;
   function pushHistory(label, stateClone) {
@@ -54,8 +69,7 @@
   }
 
   function render(highlightSet) {
-    Viewer.build(doc);
-    if (highlightSet) Viewer.setHighlight(highlightSet);
+    rebuildView(highlightSet);
   }
 
   // ---------- helpers ----------
@@ -118,6 +132,7 @@
       fileName = file.name;
       doc = await ThreeMF.load(await file.arrayBuffer());
       if (!doc.meshes.length) { toast("No mesh found in this .3mf", true); return; }
+      splitParts = [];
       for (const m of doc.meshes) Cleanup.computeDominant(m);
       computeModelSize();
       render(null);
@@ -197,9 +212,9 @@
     document.querySelectorAll("#optionsbar .opt").forEach((p) => (p.hidden = p.dataset.panel !== name));
     const paintTool = name === "brush" || name === "ring" || name === "fill";
     $("palette").classList.toggle("hide", !paintTool);
-    Viewer.setTool(name === "brush" ? "paint" : name === "ring" || name === "fill" ? "pick" : "orbit");
+    Viewer.setTool(name === "brush" ? "paint" : (name === "ring" || name === "fill" || name === "split") ? "pick" : "orbit");
     Viewer.enableHover(name === "brush" || name === "ring");
-    if (doc && paintTool && doc.meshes.some((m) => !m._sub)) {
+    if (doc && (paintTool || name === "split") && doc.meshes.some((m) => !m._sub)) {
       busy("Preparing tool…", () => { for (const m of doc.meshes) Cleanup.buildSubGraph(m); });
     }
     updateSizeDots();
@@ -303,9 +318,21 @@
     updateStats();
     toast("Filled " + res.count.toLocaleString() + " sub-triangles");
   }
+  function doSplit(hit) {
+    if (previewActive) { restore(current()); previewActive = false; }
+    const m = doc.meshes[hit.meshIndex];
+    if (hit.localSub == null) return;
+    const subs = Cleanup.selectColorRegion(m, hit.localSub);
+    if (!subs.length) { toast("Nothing to split there", true); return; }
+    splitParts.push({ meshIndex: hit.meshIndex, subs, state: hit.state });
+    pushHistory("Split");
+    render(null);
+    toast("Split " + subs.length.toLocaleString() + " sub-triangles into a new solid");
+  }
   Viewer.onPick((hit) => {
     if (activeTool === "ring") doRing(hit);
     else if (activeTool === "fill") doFill(hit);
+    else if (activeTool === "split") doSplit(hit);
   });
 
   // ---------- auto-clean ----------
@@ -385,6 +412,20 @@
   const doUndo = () => jumpTo(histIndex - 1);
   const doRedo = () => jumpTo(histIndex + 1);
 
+  async function doExportSplit() {
+    if (!doc) return;
+    if (!splitParts.length) { toast("Split a region first", true); return; }
+    try {
+      toast("Packing split .3mf …");
+      const blob = await ThreeMF.exportSplit(doc, splitParts);
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = fileName.replace(/\.3mf$/i, "") + "_split.3mf";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      toast("Saved " + a.download);
+    } catch (e) { console.error(e); toast("Split export failed: " + e.message, true); }
+  }
   async function doExport() {
     if (!doc) return;
     try {
@@ -424,6 +465,7 @@
   $("undoBtn").addEventListener("click", doUndo);
   $("redoBtn").addEventListener("click", doRedo);
   $("exportBtn").addEventListener("click", doExport);
+  $("exportSplitBtn").addEventListener("click", doExportSplit);
   $("reframeBtn").addEventListener("click", () => Viewer.frame());
   $("bgToggle").addEventListener("click", () => $("stage").classList.toggle("dark"));
 

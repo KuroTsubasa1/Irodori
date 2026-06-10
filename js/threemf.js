@@ -155,5 +155,75 @@
     });
   }
 
-  global.ThreeMF = { load, exportZip };
+  // Build a split .3mf: each split part + the painted remainder become separate
+  // top-level objects, coincident at the original build transform.
+  // splitParts: [{ meshIndex, subs:Int32Array|number[], state }]
+  async function exportSplit(doc, splitParts) {
+    const claimed = doc.meshes.map(() => new Set());
+    for (const p of splitParts)
+      for (const s of p.subs) claimed[p.meshIndex].add(s);
+
+    const extruderFor = (st) => (st === 0 ? doc.defaultExtruder : st);
+    const nameFor = (st) => "Filament " + extruderFor(st);
+    const objects = [];
+
+    // split parts -> uniform-color solids (no per-triangle paint)
+    for (const p of splitParts) {
+      const g = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs));
+      objects.push({
+        name: nameFor(p.state), extruder: extruderFor(p.state),
+        positions: g.positions, indices: g.indices, triState: null,
+      });
+    }
+    // remaining (unclaimed) per mesh -> painted, hole-capped solid
+    for (let mi = 0; mi < doc.meshes.length; mi++) {
+      const sub = Cleanup.buildSubGraph(doc.meshes[mi]);
+      const rem = [];
+      for (let s = 0; s < sub.NS; s++) if (!claimed[mi].has(s)) rem.push(s);
+      if (!rem.length) continue;
+      const g = Split.solidFromSubs(doc.meshes[mi], rem);
+      objects.push({
+        name: "Remaining", extruder: doc.defaultExtruder,
+        positions: g.positions, indices: g.indices, triState: g.triState,
+      });
+    }
+    if (!objects.length) throw new Error("Nothing to export");
+
+    // build transform from the original root model (best-effort)
+    let bt = "1 0 0 0 1 0 0 0 1 125 125 0";
+    const rootTxt = await readText(doc.zip, /3dmodel\.model$/i);
+    if (rootTxt) {
+      const m = rootTxt.match(/<item[^>]*transform="([^"]+)"/);
+      if (m) bt = m[1];
+    }
+
+    const xml = Split.buildSplitXML(objects, {
+      buildTransform: bt, defaultExtruder: doc.defaultExtruder,
+    });
+
+    // fresh zip: copy preserved files, replace the three generated ones
+    const zip = new JSZip();
+    const keep = [
+      [/project_settings\.config$/i, "Metadata/project_settings.config"],
+      [/\[Content_Types\]\.xml$/i, "[Content_Types].xml"],
+      [/_rels\/\.rels$/i, "_rels/.rels"],
+      [/3dmodel\.model\.rels$/i, "3D/_rels/3dmodel.model.rels"],
+    ];
+    for (const [rx, path] of keep) {
+      const t = await readText(doc.zip, rx);
+      if (t != null) zip.file(path, t);
+    }
+    zip.file("3D/3dmodel.model", xml.rootModel);
+    zip.file("3D/Objects/object_1.model", xml.objectsModel);
+    zip.file("Metadata/model_settings.config", xml.modelSettings);
+
+    return await zip.generateAsync({
+      type: "blob",
+      compression: "DEFLATE",
+      compressionOptions: { level: 6 },
+      mimeType: "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
+    });
+  }
+
+  global.ThreeMF = { load, exportZip, exportSplit };
 })(window);
