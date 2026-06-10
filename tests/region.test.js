@@ -120,3 +120,24 @@ test("mirrorStamps reflects stamps across enabled axis centers", () => {
   const two = Cleanup.mirrorStamps(mesh, [{ x: 1.5, y: 0.3, z: 0, r: 0.5 }], [0, 1]);
   assert.equal(two.length, 4, "two axes -> 4 copies");
 });
+
+test("featureAxis orthogonalizes against a given surface normal", () => {
+  const { Cleanup } = loadModules();
+  const fa = Cleanup.featureAxis(makeTetra(), 0, 10, 0, 0, 1); // small region -> early-return path
+  const dot = fa.ax * 0 + fa.ay * 0 + fa.az * 1;
+  assert.ok(Math.abs(dot) < 1e-6, "axis is perpendicular to the normal (got dot " + dot + ")");
+});
+
+test("remapStates rewrites solid and split faces", () => {
+  const { Cleanup, Paint } = loadModules();
+  const mesh = makeTetra(); // paints "4","4","4","8" (states 1,1,1,2)
+  const n = Cleanup.remapStates(mesh, (s) => (s === 2 ? 0 : s));
+  assert.equal(n, 1, "one face changed");
+  assert.equal(mesh.paints[3], "", "state-2 face became default (empty code)");
+  // a split face: "841" = 1-way split with leaves states 1 and 2
+  const m2 = { nf: 1, positions: new Float32Array(9), v1: Int32Array.from([0]), v2: Int32Array.from([1]), v3: Int32Array.from([2]), paints: ["841"] };
+  Cleanup.remapStates(m2, (s) => (s === 2 ? 5 : s));
+  const counts = {};
+  Paint.addLeafCounts(Paint.decode(m2.paints[0]), counts);
+  assert.deepEqual(Object.keys(counts).map(Number).sort((a, b) => a - b), [1, 5]);
+});

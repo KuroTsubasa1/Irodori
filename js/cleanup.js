@@ -292,6 +292,28 @@
     return floodAccept(g, seedSub, inBand);
   }
 
+  // Rewrite every face's paint states through mapFn (decode -> remapLeaves ->
+  // collapse -> encode). Used when deleting a filament (k -> 0, >k shifts down).
+  // Note: remapLeaves returns the same node only for untouched LEAF faces;
+  // split faces are always rebuilt, so the encode comparison filters no-ops.
+  function remapStates(mesh, mapFn) {
+    let changed = 0;
+    for (let f = 0; f < mesh.nf; f++) {
+      const tree = Paint.decode(mesh.paints[f]);
+      const mapped = Paint.remapLeaves(tree, mapFn);
+      if (mapped === tree) continue;
+      const col = Paint.collapseDeep(mapped);
+      const enc = Paint.encode(col);
+      if (enc !== mesh.paints[f]) {
+        mesh.paints[f] = enc;
+        changed++;
+        if (mesh.dom) mesh.dom[f] = Paint.dominantState(col);
+      }
+    }
+    if (changed) invalidateSub(mesh);
+    return changed;
+  }
+
   // Paint the given local sub-triangles to `state`; re-encode affected faces.
   // Does NOT collapse, so the cached graph stays valid for fast repeated paints.
   function applyStates(mesh, subs, state) {
@@ -755,6 +777,7 @@
     selectBandAxis,
     featureAxis,
     applyStates,
+    remapStates,
     subSizes,
     invalidateSub,
     selectColorRegion,
