@@ -125,3 +125,56 @@ test("fillLoop stays within budget on a fractal-scale rim (regression: density b
   assert.equal(cov.rimOnce, n, "rim covered exactly once");
   assert.equal(cov.internalWrong, 0, "interior edges paired");
 });
+
+test("cap winding: orientation-consistent, rim forward, folds confined to micro-slivers", () => {
+  const { Liepa } = loadModules();
+  const n = 1200;
+  const loop = [...Array(n).keys()];
+  const getPt = (i) => {
+    const a = (i / n) * Math.PI * 2;
+    const r = 10 + 0.15 * Math.sin(37 * a);
+    return [Math.cos(a) * r, Math.sin(a) * r, 0.4 * Math.sin(5 * a)];
+  };
+  const cap = Liepa.fillLoop(loop, getPt); // production path
+  const pos = (i) => (i < n ? getPt(i) : cap.extraPts[i - n]);
+  // (a) orientation consistency: no directed edge may appear twice
+  const dir = new Map();
+  for (const [a, b, c] of cap.tris) for (const [u, v] of [[a, b], [b, c], [c, a]]) {
+    const k = u + ">" + v;
+    dir.set(k, (dir.get(k) || 0) + 1);
+  }
+  let doubleDirected = 0;
+  for (const cnt of dir.values()) if (cnt > 1) doubleDirected++;
+  assert.equal(doubleDirected, 0, "no edge traversed twice in the same direction");
+  // (b) every rim edge traversed exactly once, loop-forward
+  for (let i = 0; i < n; i++) {
+    assert.equal(dir.get(i + ">" + ((i + 1) % n)) || 0, 1, "rim edge " + i + " forward");
+    assert.equal(dir.get(((i + 1) % n) + ">" + i) || 0, 0, "rim edge " + i + " not backward");
+  }
+  // (c) folds (normals opposing the rim's Newell normal) carry < 2% of the cap
+  // AREA: fractal strip bands produce sign-alternating micro-slivers (accepted,
+  // sub-print scale), but a winding bug inverts LARGE interior triangles —
+  // which this area bound catches (the pre-fix flip bug scored ~30%).
+  let nx = 0, ny = 0, nz = 0;
+  for (let i = 0; i < n; i++) {
+    const a = getPt(i), b = getPt((i + 1) % n);
+    nx += (a[1] - b[1]) * (a[2] + b[2]);
+    ny += (a[2] - b[2]) * (a[0] + b[0]);
+    nz += (a[0] - b[0]) * (a[1] + b[1]);
+  }
+  const nm = Math.hypot(nx, ny, nz);
+  let invArea = 0, totArea = 0;
+  for (const [a, b, c] of cap.tris) {
+    const pa = pos(a), pb = pos(b), pc = pos(c);
+    const ux = pb[0] - pa[0], uy = pb[1] - pa[1], uz = pb[2] - pa[2];
+    const vx = pc[0] - pa[0], vy = pc[1] - pa[1], vz = pc[2] - pa[2];
+    const tx = uy * vz - uz * vy, ty = uz * vx - ux * vz, tz = ux * vy - uy * vx;
+    const mag = Math.hypot(tx, ty, tz);
+    if (mag < 1e-12) continue;
+    const area = mag / 2;
+    totArea += area;
+    if ((tx * nx + ty * ny + tz * nz) / (mag * nm) < -0.5) invArea += area;
+  }
+  const frac = invArea / totArea;
+  assert.ok(frac < 0.02, "strongly-inverted area fraction " + (frac * 100).toFixed(2) + "% (bound 2%)");
+});

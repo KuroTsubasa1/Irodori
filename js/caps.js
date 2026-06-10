@@ -183,6 +183,7 @@
       for (const loop of loops) {
         if (loop.length < 3) continue;
         const before = tris.length;
+        const extraBefore = extraPts.length;
         try {
           const fill = LP.fillLoop(loop, (v) => getPt(v));
           const base = verts.length + extraPts.length; // current extra offset
@@ -193,6 +194,7 @@
         } catch (e) {
           console.warn("liepa fill failed for a loop; centroid fallback:", e && e.message);
           while (tris.length > before) tris.pop();
+          while (extraPts.length > extraBefore) extraPts.pop();
           emitCentroidFan(loop);
         }
       }

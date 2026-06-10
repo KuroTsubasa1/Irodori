@@ -129,7 +129,7 @@
       // --- split pass (snapshot the length: children are reconsidered next pass) ---
       let split = 0;
       const end = tris.length;
-      for (let t = 0; t < end && tris.length < maxTris; t++) {
+      for (let t = 0; t < end && tris.length + 2 <= maxTris; t++) {
         const [a, b, c] = tris[t];
         const pa = pos(a), pb = pos(b), pc = pos(c);
         const m = [(pa[0] + pb[0] + pc[0]) / 3, (pa[1] + pb[1] + pc[1]) / 3, (pa[2] + pb[2] + pc[2]) / 3];
@@ -170,9 +170,15 @@
           if (liveEdges.has(ek(o1, o2))) continue; // flip target edge already exists
           const cs = circumsphere(pos(u), pos(v), pos(o1));
           if (!cs || dist(pos(o2), cs.cc) >= cs.r - 1e-9) continue;
-          // flip (u,v) -> (o1,o2), keeping each new triangle's winding from its parent
-          tris[t1] = [u, o2, o1];
-          tris[t2] = [v, o1, o2];
+          // flip (u,v) -> (o1,o2). u < v comes from the sorted edge key, NOT from
+          // the triangle's winding — check which direction t1 actually holds the
+          // edge in, or ~a third of flipped triangles come out inverted.
+          let uToV = false;
+          for (let i = 0; i < 3; i++) {
+            if (tris[t1][i] === u && tris[t1][(i + 1) % 3] === v) { uToV = true; break; }
+          }
+          if (uToV) { tris[t1] = [u, o2, o1]; tris[t2] = [v, o1, o2]; }
+          else { tris[t1] = [u, o1, o2]; tris[t2] = [v, o2, o1]; }
           liveEdges.delete(k);
           liveEdges.add(ek(o1, o2));
           sweepFlips++;
@@ -235,9 +241,13 @@
     // coarse cap (indices into `coarse` -> map back to loop indices)
     const coarsePts = coarse.map((i) => P[i]);
     const tris = dpFill(coarsePts).map((t) => t.map((c) => coarse[c]));
-    // strips: reattach the skipped fine chain under each coarse edge with the
-    // same DP (strip polygon = [a, fine..., b]; its (b,a) edge pairs with the
-    // coarse cap's (a,b) edge in the opposite direction — one oriented patch)
+    // strips: reattach the skipped fine chain under each coarse edge with a fan
+    // from the chord endpoint `a` (its (b,a) edge pairs with the coarse cap's
+    // (a,b) edge in the opposite direction — one oriented patch). A fan, not a
+    // polygon triangulation: fractal chains WEAVE across their chord, making
+    // the strip polygon self-intersecting — any polygon triangulation of it
+    // must fold. Fan folds only on the rarer bend-back-past-`a` condition,
+    // confined to micro-slivers at the rim (sub-print scale; see spec).
     const m = coarse.length;
     for (let t = 0; t < m; t++) {
       const a = coarse[t], b = coarse[(t + 1) % m];
@@ -245,8 +255,9 @@
       for (let i = (a + 1) % n; i !== b; i = (i + 1) % n) chain.push(i);
       if (!chain.length) continue;
       const stripIdx = [a, ...chain, b];
-      const stripTris = dpFill(stripIdx.map((i) => P[i]));
-      for (const tri of stripTris) tris.push(tri.map((s) => stripIdx[s]));
+      for (let j = 1; j < stripIdx.length - 1; j++) {
+        tris.push([a, stripIdx[j], stripIdx[j + 1]]);
+      }
     }
     const extraPts = [];
     if (opts.refine !== false) {
