@@ -480,8 +480,14 @@
   document.addEventListener("keydown", (e) => {
     if (!doc) return;
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); }
-    else if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); doRedo(); }
+    if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
+    if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); doRedo(); return; }
+    // tool shortcuts: modifier-free, ignored while typing in a field
+    if (mod || e.altKey) return;
+    const tag = (e.target && e.target.tagName) || "";
+    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+    const tool = { o: "orbit", r: "rotate", b: "brush", n: "ring", f: "fill", s: "split" }[e.key.toLowerCase()];
+    if (tool) { e.preventDefault(); setTool(tool); }
   });
 
   const stage = $("stage");
