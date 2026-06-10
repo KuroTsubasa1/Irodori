@@ -43,7 +43,7 @@
   function snap() {
     return {
       meshes: doc.meshes.map((m) => ({ paints: m.paints.slice(), dom: Int32Array.from(m.dom) })),
-      splits: splitParts.map((p) => ({ meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state })),
+      splits: splitParts.map((p) => ({ meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method })),
     };
   }
   function restore(state) {
@@ -52,7 +52,7 @@
       m.dom = Int32Array.from(state.meshes[i].dom);
       Cleanup.invalidateSub(m);
     });
-    splitParts = state.splits.map((p) => ({ meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state }));
+    splitParts = state.splits.map((p) => ({ meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method }));
   }
   const current = () => history[histIndex].state;
   function pushHistory(label, stateClone) {
@@ -324,7 +324,7 @@
     if (hit.localSub == null) return;
     const subs = Cleanup.selectColorRegion(m, hit.localSub);
     if (!subs.length) { toast("Nothing to split there", true); return; }
-    splitParts.push({ meshIndex: hit.meshIndex, subs, state: hit.state });
+    splitParts.push({ meshIndex: hit.meshIndex, subs, state: hit.state, method: $("capMethod").value });
     pushHistory("Split");
     render(null);
     toast("Split " + subs.length.toLocaleString() + " sub-triangles into a new solid");
@@ -466,6 +466,14 @@
   $("redoBtn").addEventListener("click", doRedo);
   $("exportBtn").addEventListener("click", doExport);
   $("exportSplitBtn").addEventListener("click", doExportSplit);
+  $("capMethod").addEventListener("change", () => {
+    if (!doc || !splitParts.length) return;
+    const method = $("capMethod").value;
+    for (const p of splitParts) p.method = method;
+    pushHistory("Cap method: " + method);
+    render(null);
+    toast("Re-capped " + splitParts.length + " part(s) with " + method);
+  });
   $("reframeBtn").addEventListener("click", () => Viewer.frame());
   $("bgToggle").addEventListener("click", () => $("stage").classList.toggle("dark"));
 

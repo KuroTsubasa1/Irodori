@@ -89,6 +89,13 @@
         </div>
 
         <div class="opt" data-panel="split" hidden>
+          <span class="optlabel">Cap method</span>
+          <select id="capMethod">
+            <option value="earcut" selected>Earcut</option>
+            <option value="cdt">CDT (Delaunay)</option>
+            <option value="projected">Projected normal</option>
+            <option value="centroid">Centroid</option>
+          </select>
           <span class="muted">Click a colored part to lift it out as its own solid.</span>
           <button id="exportSplitBtn" class="secondary slim">Export split (.3mf)</button>
         </div>
