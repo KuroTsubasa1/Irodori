@@ -113,7 +113,7 @@
       filaments = fallback.map((h, i) => ({ index: i + 1, hex: h }));
     }
 
-    return { zip, filaments, defaultExtruder, meshes };
+    return { zip, filaments, defaultExtruder, meshes, origFilamentCount: filaments.length };
   }
 
   // Compact float formatting (trims trailing zeros, keeps printing precision).
@@ -146,6 +146,13 @@
       const tBlock = "\n" + tlines.join("\n") + "\n    ";
       const newText = mesh._pre + vBlock + mesh._mid + tBlock + mesh._tail;
       doc.zip.file(mesh.path, newText);
+    }
+    if (doc.filaments.length > (doc.origFilamentCount || doc.filaments.length)) {
+      const arr = doc.zip.file(/project_settings\.config$/i);
+      if (arr && arr.length) {
+        const text = await arr[0].async("string");
+        doc.zip.file(arr[0].name, extendFilamentConfig(text, doc.origFilamentCount, doc.filaments));
+      }
     }
     return await doc.zip.generateAsync({
       type: "blob",
