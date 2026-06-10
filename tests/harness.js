@@ -20,6 +20,7 @@ function loadModules() {
     "js/liepa.js",
     "js/caps.js",
     "js/split.js",
+    "js/planecut.js",
     "js/threemf.js",
   ]) {
     const code = fs.readFileSync(path.join(__dirname, "..", f), "utf8");
@@ -34,6 +35,7 @@ function loadModules() {
     poly2tri: sandbox.poly2tri,
     ThreeMF: sandbox.ThreeMF,
     Liepa: sandbox.Liepa,
+    PlaneCut: sandbox.PlaneCut,
     window: sandbox,
   };
 }
@@ -125,6 +127,18 @@ function makeOpenTube() {
   };
 }
 
+// A closed, consistently outward-wound 2x2x2 cube (12 triangles), solid state 1.
+function makeClosedCube() {
+  return {
+    nf: 12,
+    positions: new Float32Array([0,0,0, 2,0,0, 2,2,0, 0,2,0, 0,0,2, 2,0,2, 2,2,2, 0,2,2]),
+    v1: Int32Array.from([0, 0, 4, 4, 0, 0, 2, 2, 0, 0, 1, 1]),
+    v2: Int32Array.from([2, 3, 5, 6, 1, 5, 3, 7, 4, 7, 2, 6]),
+    v3: Int32Array.from([1, 2, 6, 7, 5, 4, 7, 6, 7, 3, 6, 5]),
+    paints: ["4", "4", "4", "4", "4", "4", "4", "4", "4", "4", "4", "4"],
+  };
+}
+
 // One large unpainted face (state 0) for stamp-refinement tests.
 function makeBigTriangle() {
   return {
@@ -168,4 +182,4 @@ function signedVolume(indices, positions) {
   return v6 / 6;
 }
 
-module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeBigTriangle, directedViolations, signedVolume };
+module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeClosedCube, makeBigTriangle, directedViolations, signedVolume };
