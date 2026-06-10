@@ -32,6 +32,7 @@
     mesh._sub = null;
     mesh._subSizes = null;
     mesh._mirror = null;
+    mesh._axisCenters = null;
   }
 
   // Build (or return cached) the sub-triangle adjacency graph for a mesh.
@@ -693,6 +694,39 @@
     return map;
   }
 
+  // Per-axis center of the sub-triangle centroid bounds — the SAME centers
+  // mirrorMap uses, so live mirror previews and stamp reflection agree.
+  function axisCenters(mesh) {
+    if (mesh._axisCenters) return mesh._axisCenters;
+    const g = buildSubGraph(mesh);
+    const lo = [Infinity, Infinity, Infinity], hi = [-Infinity, -Infinity, -Infinity];
+    for (let i = 0; i < g.NS; i++) for (let a = 0; a < 3; a++) {
+      const v = g.cen[i * 3 + a];
+      if (v < lo[a]) lo[a] = v; if (v > hi[a]) hi[a] = v;
+    }
+    mesh._axisCenters = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
+    return mesh._axisCenters;
+  }
+
+  // Expand a stamp list across the enabled mirror axes (0=x,1=y,2=z): each
+  // enabled axis doubles the list with copies reflected about that axis center,
+  // yielding all 2^k combinations.
+  function mirrorStamps(mesh, stamps, axes) {
+    if (!axes || !axes.length) return stamps;
+    const c = axisCenters(mesh);
+    const keys = ["x", "y", "z"];
+    let out = stamps.slice();
+    for (const a of axes) {
+      const add = out.map((s) => {
+        const m = { x: s.x, y: s.y, z: s.z, r: s.r };
+        m[keys[a]] = 2 * c[a] - m[keys[a]];
+        return m;
+      });
+      out = out.concat(add);
+    }
+    return out;
+  }
+
   global.Cleanup = {
     computeDominant,
     buildSubGraph,
@@ -708,5 +742,7 @@
     selectColorRegion,
     mirrorMap,
     paintStamps,
+    axisCenters,
+    mirrorStamps,
   };
 })(window);

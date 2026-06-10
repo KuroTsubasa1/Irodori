@@ -109,3 +109,14 @@ test("paintStamps leaves untouched faces alone", () => {
   assert.equal(res.count, 0);
   assert.equal(mesh.paints[0], "", "paint string unchanged");
 });
+
+test("mirrorStamps reflects stamps across enabled axis centers", () => {
+  const { Cleanup } = loadModules();
+  const mesh = makeMirrorPair(); // x-symmetric around x=0
+  const one = Cleanup.mirrorStamps(mesh, [{ x: 1.5, y: 0.3, z: 0, r: 0.5 }], [0]);
+  assert.equal(one.length, 2);
+  assert.ok(one.some((s) => Math.abs(s.x - 1.5) < 1e-6));
+  assert.ok(one.some((s) => Math.abs(s.x + 1.5) < 1e-6), "reflected about the x center (0)");
+  const two = Cleanup.mirrorStamps(mesh, [{ x: 1.5, y: 0.3, z: 0, r: 0.5 }], [0, 1]);
+  assert.equal(two.length, 4, "two axes -> 4 copies");
+});
