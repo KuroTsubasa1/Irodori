@@ -121,6 +121,60 @@
     return Number.isInteger(v) ? String(v) : parseFloat(v.toFixed(5)).toString();
   }
 
+  // Parse EVERY <mesh> in a .model file. Each result records the inner offset
+  // ranges of its <vertices> and <triangles> so the file can be rebuilt.
+  function parseMeshes(text, path) {
+    const meshes = [];
+    const vre = /<vertex\s+x="([^"]+)"\s+y="([^"]+)"\s+z="([^"]+)"/g;
+    const tre = /<triangle\s+v1="(\d+)"\s+v2="(\d+)"\s+v3="(\d+)"(?:\s+paint_color="([^"]*)")?\s*\/>/g;
+    let from = 0;
+    for (;;) {
+      const meshIdx = text.indexOf("<mesh>", from);
+      if (meshIdx === -1) break;
+      const meshEnd = text.indexOf("</mesh>", meshIdx);
+      const scope = meshEnd === -1 ? text.length : meshEnd;
+      const vOpen = text.indexOf("<vertices>", meshIdx);
+      if (vOpen === -1 || vOpen > scope) { from = meshIdx + 6; continue; }
+      const vInner = vOpen + "<vertices>".length;
+      const vEnd = text.indexOf("</vertices>", vInner);
+      const tOpen = text.indexOf("<triangles>", vEnd);
+      const tInner = tOpen + "<triangles>".length;
+      const tClose = text.indexOf("</triangles>", tInner);
+      const vBlock = text.slice(vInner, vEnd);
+      const xs = []; let m; vre.lastIndex = 0;
+      while ((m = vre.exec(vBlock))) xs.push(+m[1], +m[2], +m[3]);
+      const tBlock = text.slice(tInner, tClose);
+      const i1 = [], i2 = [], i3 = [], paints = []; tre.lastIndex = 0;
+      while ((m = tre.exec(tBlock))) { i1.push(+m[1]); i2.push(+m[2]); i3.push(+m[3]); paints.push(m[4] || ""); }
+      meshes.push({
+        path, positions: new Float32Array(xs), nv: xs.length / 3, nf: i1.length,
+        v1: Int32Array.from(i1), v2: Int32Array.from(i2), v3: Int32Array.from(i3), paints,
+        vRange: [vInner, vEnd], tRange: [tInner, tClose],
+      });
+      from = tClose === -1 ? scope : tClose;
+    }
+    return meshes;
+  }
+
+  // Rebuild a .model file's text: splice each mesh's regenerated <vertex>/
+  // <triangle> lines into its recorded ranges, back-to-front so offsets stay valid.
+  function rebuildModelFile(text, fileMeshes) {
+    const edits = [];
+    for (const mesh of fileMeshes) {
+      const P = mesh.positions;
+      const vlines = new Array(mesh.nv);
+      for (let i = 0; i < mesh.nv; i++) { const o = i * 3; vlines[i] = '     <vertex x="' + fnum(P[o]) + '" y="' + fnum(P[o + 1]) + '" z="' + fnum(P[o + 2]) + '"/>'; }
+      const tlines = new Array(mesh.nf);
+      for (let i = 0; i < mesh.nf; i++) { const p = mesh.paints[i]; const base = '     <triangle v1="' + mesh.v1[i] + '" v2="' + mesh.v2[i] + '" v3="' + mesh.v3[i] + '"'; tlines[i] = p ? base + ' paint_color="' + p + '"/>' : base + "/>"; }
+      edits.push({ s: mesh.vRange[0], e: mesh.vRange[1], content: "\n" + vlines.join("\n") + "\n    " });
+      edits.push({ s: mesh.tRange[0], e: mesh.tRange[1], content: "\n" + tlines.join("\n") + "\n    " });
+    }
+    edits.sort((a, b) => b.s - a.s); // back-to-front
+    let out = text;
+    for (const ed of edits) out = out.slice(0, ed.s) + ed.content + out.slice(ed.e);
+    return out;
+  }
+
   // Rebuild both the vertices and triangles blocks from the mesh's current
   // positions/paints (so rotation and color edits are both written) and
   // generate a new .3mf Blob.
@@ -261,5 +315,5 @@
     return JSON.stringify(j);
   }
 
-  global.ThreeMF = { load, exportZip, exportSplit, extendFilamentConfig };
+  global.ThreeMF = { load, exportZip, exportSplit, extendFilamentConfig, parseMeshes, rebuildModelFile };
 })(window);
