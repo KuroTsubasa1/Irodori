@@ -14,6 +14,8 @@ function loadModules() {
     "vendor/three.min.js",
     "vendor/poly2tri.min.js",
     "js/paint.js",
+    "js/subgraph.js",
+    "js/select.js",
     "js/cleanup.js",
     "js/liepa.js",
     "js/caps.js",
