@@ -312,19 +312,26 @@
   function startStroke(hit) {
     if (paintState == null) return;
     if (previewActive) { restore(current()); previewActive = false; }
-    stroke = { mi: hit.meshIndex, pend: new Set() };
+    stroke = { mi: hit.meshIndex, pend: new Set(), stamps: [] };
     brushAt(hit);
   }
+  const enabledAxes = () => [...document.querySelectorAll("#symAxes button.on")].map((b) => +b.dataset.axis);
   function brushAt(hit) {
     if (!stroke || hit.meshIndex !== stroke.mi) return;
     const m = doc.meshes[hit.meshIndex];
-    const subs = Cleanup.selectRadius(m, hit.localSub, hit.point.x, hit.point.y, hit.point.z, brushRadius());
+    const r = brushRadius();
+    stroke.stamps.push({ x: hit.point.x, y: hit.point.y, z: hit.point.z, r });
+    // live preview: whole-leaf tint (the precise stamp refinement runs on release)
+    const subs = Cleanup.selectRadius(m, hit.localSub, hit.point.x, hit.point.y, hit.point.z, r);
     let all = subs;
-    if ($("brushSym").checked) {
-      const axis = { x: 0, y: 1, z: 2 }[$("brushSymAxis").value] || 0;
-      const mir = Cleanup.mirrorMap(m, axis);
-      all = subs.slice();
-      for (const s of subs) { const p = mir[s]; if (p >= 0) all.push(p); }
+    const axes = enabledAxes();
+    if (axes.length) {
+      const set = new Set(subs);
+      for (const a of axes) {
+        const mir = Cleanup.mirrorMap(m, a);
+        for (const s of [...set]) { const p = mir[s]; if (p >= 0) set.add(p); }
+      }
+      all = [...set];
     }
     const g = [];
     for (const s of all) { stroke.pend.add(s); g.push(Viewer.toGlobalSub(hit.meshIndex, s)); }
@@ -332,13 +339,17 @@
   }
   function endStroke() {
     if (!stroke) return;
-    const m = doc.meshes[stroke.mi], subs = [...stroke.pend];
+    const m = doc.meshes[stroke.mi], stamps = stroke.stamps;
     stroke = null;
-    if (!subs.length) return;
-    Cleanup.applyStates(m, subs, paintState);
-    pushHistory("Brush");
-    render(null);
-    updateStats();
+    if (!stamps.length) return;
+    const expanded = Cleanup.mirrorStamps(m, stamps, enabledAxes());
+    busy("Refining stroke…", () => {
+      const res = Cleanup.paintStamps(m, expanded, paintState, { maxDepth: 4 });
+      if (!res.count) { render(null); return; } // painted same-over-same: just restore the live tint
+      pushHistory("Brush");
+      render(null);
+      updateStats();
+    });
   }
   Viewer.onPaint({
     down: (hit) => { if (activeTool === "brush") startStroke(hit); },
@@ -556,6 +567,9 @@
     updateSizeDots();
     if (activeTool === "ring" && lastHit) onHover(lastHit);
   });
+  document.querySelectorAll("#symAxes button").forEach((b) =>
+    b.addEventListener("click", () => b.classList.toggle("on"))
+  );
   $("sizeRange").addEventListener("input", () => { $("sizeNum").value = tickToVal(+$("sizeRange").value); clearPreview(); });
   $("sizeNum").addEventListener("input", () => { $("sizeRange").value = valToTick(+$("sizeNum").value || 1); clearPreview(); });
   $("previewBtn").addEventListener("click", doPreview);
