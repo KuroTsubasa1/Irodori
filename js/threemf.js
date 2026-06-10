@@ -134,12 +134,10 @@
       const base = (doc.files && doc.files[path]) || null;
       if (base != null) doc.zip.file(path, rebuildModelFile(base, fileMeshes));
     }
-    if (doc.filaments.length > (doc.origFilamentCount ?? 0)) {
-      const arr = doc.zip.file(/project_settings\.config$/i);
-      if (arr && arr.length) {
-        const text = await arr[0].async("string");
-        doc.zip.file(arr[0].name, extendFilamentConfig(text, doc.origFilamentCount, doc.filaments));
-      }
+    const cfgArr = doc.zip.file(/project_settings\.config$/i);
+    if (cfgArr && cfgArr.length) {
+      const text = await cfgArr[0].async("string");
+      doc.zip.file(cfgArr[0].name, normalizeFilamentConfig(text, doc.origFilamentCount ?? doc.filaments.length, doc.filaments));
     }
     return await doc.zip.generateAsync({
       type: "blob",
@@ -212,8 +210,12 @@
       [/3dmodel\.model\.rels$/i, "3D/_rels/3dmodel.model.rels"],
     ];
     for (const [rx, path] of keep) {
-      const t = await readText(doc.zip, rx);
-      if (t != null) zip.file(path, t);
+      let t = await readText(doc.zip, rx);
+      if (t == null) continue;
+      if (path === "Metadata/project_settings.config") {
+        t = normalizeFilamentConfig(t, doc.origFilamentCount ?? doc.filaments.length, doc.filaments);
+      }
+      zip.file(path, t);
     }
     zip.file("3D/3dmodel.model", xml.rootModel);
     zip.file("3D/Objects/object_1.model", xml.objectsModel);
@@ -225,6 +227,16 @@
       compressionOptions: { level: 6 },
       mimeType: "application/vnd.ms-package.3dmanufacturing-3dmodel+xml",
     });
+  }
+
+  // Export-time filament normalization: extend per-filament arrays for added
+  // colours, then force every filament to a generic profile (user setting —
+  // exported files always slice as Generic PLA).
+  function normalizeFilamentConfig(configText, origCount, filaments) {
+    const j = JSON.parse(extendFilamentConfig(configText, origCount, filaments));
+    j.filament_settings_id = filaments.map(() => "Generic PLA");
+    j.filament_type = filaments.map(() => "PLA");
+    return JSON.stringify(j);
   }
 
   // Extend a Bambu project_settings.config (JSON text) to include newly-added
@@ -248,5 +260,5 @@
     return JSON.stringify(j);
   }
 
-  global.ThreeMF = { load, exportZip, exportSplit, extendFilamentConfig, parseMeshes, rebuildModelFile };
+  global.ThreeMF = { load, exportZip, exportSplit, extendFilamentConfig, normalizeFilamentConfig, parseMeshes, rebuildModelFile };
 })(window);
