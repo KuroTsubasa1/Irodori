@@ -236,6 +236,9 @@
     busy("Removing color…", () => {
       const mapFn = (s) => (s === k ? 0 : s > k ? s - 1 : s);
       for (const m of doc.meshes) Cleanup.remapStates(m, mapFn);
+      // split parts carry their own state — remap those too, or a part painted
+      // with the deleted/shifted colour keeps a stale extruder index
+      splitParts = splitParts.map((p) => ({ ...p, state: mapFn(p.state) }));
       doc.filaments.splice(k - 1, 1);
       doc.filaments.forEach((f, i) => (f.index = i + 1));
       pushHistory("Delete color");
