@@ -475,6 +475,7 @@
   let previewResult = null;
   function doPreview() {
     if (!doc) return;
+    clearHoverPreview(); // the rebuild invalidates any cached ring/split hover band
     busy("Analyzing…", () => {
       if (previewActive) restore(current());
       const { count, changedGlobal } = runIslands();
@@ -486,6 +487,7 @@
   }
   function doApply() {
     if (!doc) return;
+    clearHoverPreview(); // the rebuild invalidates any cached ring/split hover band
     busy("Cleaning…", () => {
       let count;
       if (previewActive) { count = previewResult ? previewResult.count : 0; }

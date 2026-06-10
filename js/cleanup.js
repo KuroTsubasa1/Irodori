@@ -517,7 +517,10 @@
    * stroke edges follow the brush instead of whole leaves. Child geometry uses
    * Paint.tessellate's exact conventions (corner rotation by `special`,
    * midpoints, reversed kid order). Trees are re-collapsed and re-encoded.
-   * stamps: [{x,y,z,r}]. Returns { count, changedFaces }. */
+   * stamps: [{x,y,z,r}]. Returns { count, changedFaces }.
+   * maxDepth is ABSOLUTE depth from the face root (not additional levels), so
+   * leaves the slicer already split deeply refine less — their leaves are tiny
+   * (~4^-depth of the face), keeping edge error sub-leaf-sized either way. */
   function paintStamps(mesh, stamps, state, opts) {
     const maxDepth = (opts && opts.maxDepth) || 4;
     const P = mesh.positions;
