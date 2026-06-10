@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { loadModules, makeTetra, edgeUseCounts, makeTJunction, makeOpenTube, directedViolations, signedVolume } = require("./harness");
+const { loadModules, makeTetra, edgeUseCounts, makeTJunction, makeOpenTube, makeClosedCube, directedViolations, signedVolume } = require("./harness");
 
 function regionOfState(Cleanup, mesh, state) {
   const g = Cleanup.buildSubGraph(mesh);
@@ -178,5 +178,63 @@ test("layoutParts lines parts up beside the body, bottoms aligned", () => {
     // bottoms aligned to the body base plane
     assert.ok(Math.abs(p.min[2] + o[2] - 0) < 1e-9, "part " + i + " rests on the body base");
     cursor = maxX + 1;
+  }
+});
+
+function asIdx(s) { return s.indices instanceof Uint32Array ? s.indices : Uint32Array.from(s.indices); }
+
+test("solidFromSubs thickness: exact plug + pocket volumes on the cube top", () => {
+  const { Split, Cleanup } = loadModules();
+  const cube = makeClosedCube();
+  Cleanup.buildSubGraph(cube);
+  const subs = [2, 3]; // the two top faces (z = 2)
+  const t = 0.5;
+  const part = Split.solidFromSubs(cube, subs, "earcut", t);
+  assert.equal(directedViolations(asIdx(part)), 0, "plug directed-watertight");
+  const vol = signedVolume(asIdx(part), part.positions);
+  assert.ok(Math.abs(vol - 2) < 1e-9, "plug volume 2x2x0.5 = 2, got " + vol);
+  // every offset point sits exactly t beneath its rim vertex (straight down)
+  const cap = part.cap;
+  const nR = cap.verts.length;
+  assert.equal(nR, 4, "four rim vids");
+  const g = Cleanup.buildSubGraph(cube);
+  for (let i = 0; i < nR; i++) {
+    const gid = cap.verts[i], off = cap.extraPts[i];
+    const d = Math.hypot(off[0] - g.vx[gid], off[1] - g.vy[gid], off[2] - g.vz[gid]);
+    assert.ok(Math.abs(d - t) < 1e-9, "offset distance = t");
+    assert.ok(Math.abs(off[2] - (2 - t)) < 1e-9, "offset moved straight down");
+  }
+  // wall = 2 triangles per rim edge; cap interior = whatever earcut made (2 here)
+  const wallTris = cap.tris.filter((tri) => tri.some((r) => r < nR));
+  assert.equal(wallTris.length, 8, "4 rim edges x 2 wall triangles");
+  // remainder reuses the plug surface reversed -> pocket; volumes sum to the cube
+  const rem = Split.remainderSolid(cube, [{ subs, cap, state: part.state }], new Set(subs));
+  assert.equal(directedViolations(asIdx(rem)), 0, "pocketed remainder directed-watertight");
+  const rvol = signedVolume(asIdx(rem), rem.positions);
+  assert.ok(Math.abs(rvol - 6) < 1e-9, "remainder volume 8-2 = 6, got " + rvol);
+  // t = 0 (and omitted) is byte-for-byte the legacy path
+  const legacy = Split.solidFromSubs(cube, subs, "earcut");
+  const zero = Split.solidFromSubs(cube, subs, "earcut", 0);
+  assert.equal(zero.indices.length, legacy.indices.length, "t=0 keeps the legacy triangle count");
+  assert.equal(zero.cap.extraPts.length, legacy.cap.extraPts.length, "t=0 keeps the legacy cap shape");
+});
+
+test("solidFromSubs thickness: tube skirts stay directed-watertight (liepa + earcut)", () => {
+  const { Split, Cleanup } = loadModules();
+  for (const method of ["liepa", "earcut"]) {
+    const tube = makeOpenTube();
+    const g = Cleanup.buildSubGraph(tube);
+    const all = Array.from({ length: g.NS }, (_, i) => i);
+    const t = 0.4;
+    const part = Split.solidFromSubs(tube, all, method, t);
+    assert.equal(directedViolations(asIdx(part)), 0, method + " skirted tube directed-watertight");
+    const vol = signedVolume(asIdx(part), part.positions);
+    assert.ok(Math.abs(vol - 8) < 1.0, method + " volume near the tube's 8, got " + vol.toFixed(3));
+    const nR = part.cap.verts.length;
+    for (let i = 0; i < nR; i++) {
+      const gid = part.cap.verts[i], off = part.cap.extraPts[i];
+      const d = Math.hypot(off[0] - g.vx[gid], off[1] - g.vy[gid], off[2] - g.vz[gid]);
+      assert.ok(Math.abs(d - t) < 1e-6, method + " offset distance = t");
+    }
   }
 });
