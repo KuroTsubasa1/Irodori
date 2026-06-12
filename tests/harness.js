@@ -139,6 +139,34 @@ function makeClosedCube() {
   };
 }
 
+// Two planar 2-triangle bands hinged at the y=1 edge, bent by `angleDeg`
+// about the hinge. Band 1 (faces 0,1) lies in z=0 with normal +z; band 2
+// (faces 2,3) has its normal exactly angleDeg away. All solid state 1.
+// Adjacent pairs: 0-1 (coplanar), 1-2 (the hinge), 2-3 (coplanar).
+// `withDegenerate` appends a zero-area triangle (vertex ON the A-B segment)
+// sharing band 1's free edge — for the zero-normal guard test.
+function makeBentStrip(angleDeg, withDegenerate) {
+  const a = (angleDeg * Math.PI) / 180;
+  const pos = [
+    0, 0, 0,  2, 0, 0,  2, 1, 0,  0, 1, 0,   // A B C D (band 1)
+    0, 1 + Math.cos(a), Math.sin(a),          // E (hinged above D)
+    2, 1 + Math.cos(a), Math.sin(a),          // F (hinged above C)
+  ];
+  const v1 = [0, 0, 3, 3], v2 = [1, 2, 2, 5], v3 = [2, 3, 5, 4];
+  const paints = ["4", "4", "4", "4"];
+  if (withDegenerate) {
+    pos.push(1, 0, 0);                        // G — collinear on A-B
+    v1.push(0); v2.push(1); v3.push(6);
+    paints.push("4");
+  }
+  return {
+    nf: paints.length,
+    positions: new Float32Array(pos),
+    v1: Int32Array.from(v1), v2: Int32Array.from(v2), v3: Int32Array.from(v3),
+    paints,
+  };
+}
+
 // One large unpainted face (state 0) for stamp-refinement tests.
 function makeBigTriangle() {
   return {
@@ -182,4 +210,4 @@ function signedVolume(indices, positions) {
   return v6 / 6;
 }
 
-module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeClosedCube, makeBigTriangle, directedViolations, signedVolume };
+module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeClosedCube, makeBentStrip, makeBigTriangle, directedViolations, signedVolume };

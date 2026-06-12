@@ -29,6 +29,7 @@
     mesh._subSizes = null;
     mesh._mirror = null;
     mesh._axisCenters = null;
+    mesh._faceG = null;
   }
 
   // Build (or return cached) the sub-triangle adjacency graph for a mesh.
@@ -149,6 +150,53 @@
     return mesh._sub;
   }
 
+  // Parent-face adjacency (CSR, same shape as the sub graph) + unit face
+  // normals. Geometry-only, lazy, cached as mesh._faceG. invalidateSub clears
+  // it anyway — one cache story for everything mesh-attached; the rebuild is
+  // a single pass over the index buffer.
+  function faceGraph(mesh) {
+    if (mesh._faceG) return mesh._faceG;
+    const nf = mesh.nf, P = mesh.positions;
+    const faceN = new Float32Array(nf * 3);
+    for (let f = 0; f < nf; f++) {
+      const a = mesh.v1[f] * 3, b = mesh.v2[f] * 3, c = mesh.v3[f] * 3;
+      const ux = P[b] - P[a], uy = P[b + 1] - P[a + 1], uz = P[b + 2] - P[a + 2];
+      const vx = P[c] - P[a], vy = P[c + 1] - P[a + 1], vz = P[c + 2] - P[a + 2];
+      const nx = uy * vz - uz * vy, ny = uz * vx - ux * vz, nz = ux * vy - uy * vx;
+      const L = Math.hypot(nx, ny, nz);
+      // degenerate faces keep (0,0,0) — selectSmartFaces never crosses them
+      if (L > 0) { faceN[f * 3] = nx / L; faceN[f * 3 + 1] = ny / L; faceN[f * 3 + 2] = nz / L; }
+    }
+    // undirected vertex-index edge -> every face sharing it (non-manifold:
+    // all pairs get connected, so no region is orphaned)
+    const NV = P.length / 3;
+    const edge = new Map();
+    const adjA = [], adjB = [];
+    for (let f = 0; f < nf; f++) {
+      const va = mesh.v1[f], vb = mesh.v2[f], vc = mesh.v3[f];
+      for (const [u, v] of [[va, vb], [vb, vc], [vc, va]]) {
+        const key = u < v ? u * NV + v : v * NV + u;
+        let arr = edge.get(key);
+        if (!arr) edge.set(key, (arr = []));
+        for (const p of arr) { adjA.push(p); adjB.push(f); }
+        arr.push(f);
+      }
+    }
+    const deg = new Int32Array(nf);
+    for (let i = 0; i < adjA.length; i++) { deg[adjA[i]]++; deg[adjB[i]]++; }
+    const start = new Int32Array(nf + 1);
+    for (let i = 0; i < nf; i++) start[i + 1] = start[i] + deg[i];
+    const list = new Int32Array(start[nf]);
+    const cur = start.slice(0, nf);
+    for (let i = 0; i < adjA.length; i++) {
+      const a2 = adjA[i], b2 = adjB[i];
+      list[cur[a2]++] = b2;
+      list[cur[b2]++] = a2;
+    }
+    mesh._faceG = { start, list, faceN, nf };
+    return mesh._faceG;
+  }
+
   // Flood the same-state component containing `seed`; returns member indices.
   function floodComponent(start, list, state, comp, seed, scratch) {
     const st = state[seed];
@@ -200,6 +248,7 @@
   Object.assign(Cleanup, {
     computeDominant,
     buildSubGraph,
+    faceGraph,
     invalidateSub,
     subSizes,
     floodComponent, // shared with cleanup.js's removeIslandsSub
