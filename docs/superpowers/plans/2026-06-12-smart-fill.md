@@ -205,7 +205,7 @@ test("selectSmartFaces: cube at 30° selects only the coplanar pair", () => {
 });
 
 test("selectSmartFaces: cube at 90° floods all 12 (epsilon regression)", () => {
-  // cos(90°) is ~6e-17, not 0 — without the -1e-9 tolerance the exactly
+  // cos(90°) is ~6e-17, not 0 — without the epsilon tolerance the exactly
   // perpendicular cube edges (dot exactly 0) would NOT pass at θ=90.
   const { Cleanup } = loadModules();
   const r = Cleanup.selectSmartFaces(makeClosedCube(), 0, 90);
@@ -261,15 +261,16 @@ In `js/select.js`, after `selectColorRegion` (ends line 175), add:
 
 ```js
   // Smart fill: flood parent faces from seedFace, crossing an edge only when
-  // the dihedral between the two faces' normals is <= angleDeg. The -1e-9 on
-  // the cosine keeps the threshold inclusive under float noise (cos 90° is
-  // ~6e-17, and exactly-perpendicular faces dot to exactly 0 — they must
-  // pass at θ=90). Degenerate (zero-normal) faces are never crossed.
+  // the dihedral between the two faces' normals is <= angleDeg. The -1e-6 on
+  // the cosine keeps the threshold inclusive under float noise: positions and
+  // faceN are float32 (~1e-7 dot error), and cos 90° is ~6e-17, not 0 — an
+  // exactly-perpendicular pair must still pass at θ=90. (Plan originally said
+  // 1e-9; the inclusive-θ test caught that float32 quantization needs 1e-6.)
   function selectSmartFaces(mesh, seedFace, angleDeg) {
     const g = Cleanup.faceGraph(mesh);
     const { start, list, faceN, nf } = g;
     if (seedFace < 0 || seedFace >= nf) return new Int32Array(0);
-    const cosT = Math.cos((angleDeg * Math.PI) / 180) - 1e-9;
+    const cosT = Math.cos((angleDeg * Math.PI) / 180) - 1e-6;
     const nzero = (f) => faceN[f * 3] !== 0 || faceN[f * 3 + 1] !== 0 || faceN[f * 3 + 2] !== 0;
     const seen = new Uint8Array(nf);
     const out = [];

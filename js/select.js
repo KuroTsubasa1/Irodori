@@ -174,6 +174,51 @@
     return Int32Array.from(out);
   }
 
+  // Smart fill: flood parent faces from seedFace, crossing an edge only when
+  // the dihedral between the two faces' normals is <= angleDeg. The -1e-6 on
+  // the cosine keeps the threshold inclusive under float noise: positions and
+  // faceN are float32 (~1e-7 dot error), and cos 90° is ~6e-17, not 0 — an
+  // exactly-perpendicular pair must still pass at θ=90. 1e-6 stays ~400x
+  // below the cosine gap between adjacent 1° slider steps, so no real crease
+  // can be misclassified. Degenerate (zero-normal) faces are never crossed.
+  function selectSmartFaces(mesh, seedFace, angleDeg) {
+    const g = Cleanup.faceGraph(mesh);
+    const { start, list, faceN, nf } = g;
+    if (seedFace < 0 || seedFace >= nf) return new Int32Array(0);
+    const cosT = Math.cos((angleDeg * Math.PI) / 180) - 1e-6;
+    const nzero = (f) => faceN[f * 3] !== 0 || faceN[f * 3 + 1] !== 0 || faceN[f * 3 + 2] !== 0;
+    const seen = new Uint8Array(nf);
+    const out = [];
+    const stk = [seedFace];
+    seen[seedFace] = 1;
+    while (stk.length) {
+      const u = stk.pop();
+      out.push(u);
+      if (!nzero(u)) continue; // degenerate seed: region = itself
+      for (let e = start[u]; e < start[u + 1]; e++) {
+        const v = list[e];
+        if (seen[v] || !nzero(v)) continue;
+        const dot =
+          faceN[u * 3] * faceN[v * 3] +
+          faceN[u * 3 + 1] * faceN[v * 3 + 1] +
+          faceN[u * 3 + 2] * faceN[v * 3 + 2];
+        if (dot >= cosT) { seen[v] = 1; stk.push(v); }
+      }
+    }
+    return Int32Array.from(out);
+  }
+
+  // Expand parent faces to their sub-triangles (for hover tinting): one pass
+  // over subFace with a face mask — O(NS), allocation-light.
+  function facesToSubs(mesh, faces) {
+    const g = Cleanup.buildSubGraph(mesh);
+    const mask = new Uint8Array(mesh.nf);
+    for (let i = 0; i < faces.length; i++) mask[faces[i]] = 1;
+    const out = [];
+    for (let s = 0; s < g.NS; s++) if (mask[g.subFace[s]]) out.push(s);
+    return Int32Array.from(out);
+  }
+
   // Per-sub mirror partner across the model-center plane perpendicular to `axis`
   // (0=x,1=y,2=z): entry s = the sub whose centroid is the mirror of s's centroid
   // (within a ~1% tolerance via a spatial grid), or -1. Cached per axis on the
@@ -255,6 +300,8 @@
     selectBand,
     selectBandAxis,
     selectColorRegion,
+    selectSmartFaces,
+    facesToSubs,
     featureAxis,
     mirrorMap,
     axisCenters,
