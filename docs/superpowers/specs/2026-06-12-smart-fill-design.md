@@ -1,7 +1,7 @@
 # Smart Fill (Batch M) — Design
 
 **Date:** 2026-06-12
-**Status:** Approved, not yet implemented.
+**Status:** Shipped (Batch M).
 
 ## Problem
 
