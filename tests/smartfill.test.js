@@ -82,3 +82,34 @@ test("facesToSubs expands faces to exactly their sub-triangles", () => {
   for (const s of subs1) assert.equal(g.subFace[s], 1);
   assert.equal(Cleanup.facesToSubs(mesh, Int32Array.from([0, 1])).length, 3);
 });
+
+test("paintFacesSolid writes solid codes, collapses splits, updates dom", () => {
+  const { Cleanup, Paint } = loadModules();
+  const mesh = makeTJunction(); // paints ["4", "441"]
+  Cleanup.computeDominant(mesh);
+  const n = Cleanup.paintFacesSolid(mesh, Int32Array.from([0, 1]), 2);
+  assert.equal(n, 2);
+  assert.equal(mesh.paints[0], "8");
+  assert.equal(mesh.paints[1], "8", "split tree collapsed to a solid code");
+  assert.equal(Paint.solidState(mesh.paints[1]), 2);
+  assert.equal(mesh.dom[0], 2);
+  assert.equal(mesh.dom[1], 2);
+});
+
+test("paintFacesSolid state 0 emits the empty code", () => {
+  const { Cleanup } = loadModules();
+  const mesh = makeTetra();
+  Cleanup.paintFacesSolid(mesh, Int32Array.from([3]), 0);
+  assert.equal(mesh.paints[3], "");
+});
+
+test("paintFacesSolid invalidates the sub caches (structure changed)", () => {
+  const { Cleanup } = loadModules();
+  const mesh = makeTJunction();
+  const before = Cleanup.buildSubGraph(mesh);
+  assert.equal(before.NS, 3);
+  Cleanup.paintFacesSolid(mesh, Int32Array.from([1]), 1);
+  assert.equal(mesh._sub, null, "collapse requires invalidateSub");
+  const after = Cleanup.buildSubGraph(mesh);
+  assert.equal(after.NS, 2, "face 1 is one sub now");
+});

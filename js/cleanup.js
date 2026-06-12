@@ -185,6 +185,22 @@
     return { count: members.length, changedFaces, from: seedState, to: target };
   }
 
+  /* Smart fill: overwrite whole parent faces with one solid state. Collapsing
+   * split trees to single leaves CHANGES the sub-triangle structure — so,
+   * unlike fillRegion's keep-the-graph-valid trick, this must invalidateSub;
+   * the next tool use pays one graph rebuild. Returns the face count. */
+  function paintFacesSolid(mesh, faces, state) {
+    const code = Paint.encode({ leaf: true, state });
+    const dom = mesh.dom;
+    for (let i = 0; i < faces.length; i++) {
+      const f = faces[i];
+      mesh.paints[f] = code;
+      if (dom) dom[f] = state;
+    }
+    Cleanup.invalidateSub(mesh);
+    return faces.length;
+  }
+
   // Squared distance from point p to triangle (a,b,c) — Ericson's closest-point
   // construction, all inputs flat scalars.
   function dist2PointTri(px, py, pz, ax, ay, az, bx, by, bz, cx, cy, cz) {
@@ -338,6 +354,7 @@
     applyStates,
     removeIslandsSub,
     fillRegion,
+    paintFacesSolid,
     paintStamps,
     remapStates,
   });
