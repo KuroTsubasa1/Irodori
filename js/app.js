@@ -366,6 +366,13 @@
     brushAt(hit);
   }
   const enabledAxes = () => [...document.querySelectorAll("#symAxes button.on")].map((b) => +b.dataset.axis);
+  const fillSmart = () => document.querySelector("#fillModes button.on").dataset.mode === "smart";
+  function updateFillPanel() {
+    const smart = fillSmart();
+    $("fillAutoWrap").hidden = smart;
+    $("fillAngleLabel").hidden = !smart;
+    $("fillAngle").hidden = !smart;
+  }
   function brushAt(hit) {
     if (!stroke || hit.meshIndex !== stroke.mi) return;
     const m = doc.meshes[hit.meshIndex];
@@ -440,7 +447,12 @@
       if (activeTool === "split") {
         subs = Cleanup.selectColorRegion(m, hit.localSub, claimedByMesh()[hit.meshIndex]);
       } else if (activeTool === "fill") {
-        subs = Cleanup.selectColorRegion(m, hit.localSub); // fillRegion's flood (no claimed-exclusion)
+        if (fillSmart()) {
+          const faces = Cleanup.selectSmartFaces(m, Cleanup.buildSubGraph(m).subFace[hit.localSub], +$("fillAngle").value);
+          subs = Cleanup.facesToSubs(m, faces);
+        } else {
+          subs = Cleanup.selectColorRegion(m, hit.localSub); // fillRegion's flood (no claimed-exclusion)
+        }
       } else {
         const fa = Cleanup.featureAxis(m, hit.localSub, ringNeighborhood(), hit.normal.x, hit.normal.y, hit.normal.z);
         subs = Cleanup.selectBandAxis(m, hit.localSub, ringHalf(), fa.ax, fa.ay, fa.az);
@@ -472,6 +484,23 @@
     updateStats();
     toast("Filled " + res.count.toLocaleString() + " sub-triangles");
   }
+  function doSmartFill(hit) {
+    if (paintState == null) return;
+    if (previewActive) { restore(current()); previewActive = false; }
+    clearHoverPreview();
+    const m = doc.meshes[hit.meshIndex];
+    const faces = Cleanup.selectSmartFaces(m, Cleanup.buildSubGraph(m).subFace[hit.localSub], +$("fillAngle").value);
+    // no-op when the whole region already carries the active color solid
+    const code = Paint.encode({ leaf: true, state: paintState });
+    let same = true;
+    for (let i = 0; i < faces.length; i++) if ((m.paints[faces[i]] || "") !== code) { same = false; break; }
+    if (same) { toast("Already that color", true); return; }
+    Cleanup.paintFacesSolid(m, faces, paintState);
+    pushHistory("Smart fill");
+    render(null);
+    updateStats();
+    toast("Filled " + faces.length.toLocaleString() + " faces");
+  }
   function doSplit(hit) {
     if (previewActive) { restore(current()); previewActive = false; }
     clearHoverPreview();
@@ -487,7 +516,7 @@
   }
   Viewer.onPick((hit) => {
     if (activeTool === "ring") doRing(hit);
-    else if (activeTool === "fill") doFill(hit);
+    else if (activeTool === "fill") (fillSmart() ? doSmartFill : doFill)(hit);
     else if (activeTool === "split") doSplit(hit);
   });
 
@@ -691,6 +720,18 @@
   document.querySelectorAll("#symAxes button").forEach((b) =>
     b.addEventListener("click", () => b.classList.toggle("on"))
   );
+  document.querySelectorAll("#fillModes button").forEach((b) =>
+    b.addEventListener("click", () => {
+      document.querySelectorAll("#fillModes button").forEach((x) => x.classList.toggle("on", x === b));
+      updateFillPanel();
+      clearHoverPreview(); // mode changes the region a hover/click means
+      if (activeTool === "fill" && lastHit) onHover(lastHit);
+    })
+  );
+  $("fillAngle").addEventListener("input", () => {
+    $("fillAngleVal").textContent = $("fillAngle").value;
+    if (activeTool === "fill") { clearHoverPreview(); if (lastHit) onHover(lastHit); }
+  });
   $("sizeRange").addEventListener("input", () => { $("sizeNum").value = tickToVal(+$("sizeRange").value); clearPreview(); });
   $("sizeNum").addEventListener("input", () => { $("sizeRange").value = valToTick(+$("sizeNum").value || 1); clearPreview(); });
   $("previewBtn").addEventListener("click", doPreview);
