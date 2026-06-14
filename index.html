@@ -60,6 +60,11 @@
           <button id="redoBtn" class="icon" disabled title="Redo (⌘⇧Z)">
             <svg class="ic" viewBox="0 0 24 24"><path d="m15 7 5 5-5 5"/><path d="M20 12H9a5 5 0 0 0 0 10h1"/></svg>
           </button>
+          <label class="check" id="objWeldWrap" title="Share coincident vertices — smaller file, smooth shading"><input type="checkbox" id="objWeld" checked /><span>Weld</span></label>
+          <button id="exportObjBtn" class="secondary" disabled title="Export the painted model as a colored .obj (+.mtl, zipped)">
+            <svg class="ic" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
+            .obj
+          </button>
           <button id="exportBtn" class="primary" disabled>
             <svg class="ic" viewBox="0 0 24 24"><path d="M12 15V3"/><path d="m7 8 5-5 5 5"/><path d="M4 15v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4"/></svg>
             Export
@@ -224,6 +229,7 @@
     <script src="vendor/jszip.min.js"></script>
     <script src="vendor/poly2tri.min.js"></script>
     <script src="js/paint.js"></script>
+    <script src="js/objexport.js"></script>
     <script src="js/threemf.js"></script>
     <script src="js/subgraph.js"></script>
     <script src="js/select.js"></script>

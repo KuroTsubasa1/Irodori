@@ -166,6 +166,7 @@
         Viewer.subTriangleCount().toLocaleString() + " sub-triangles · " + doc.filaments.length + " filaments";
       ["objectsCard", "filamentCard", "cleanCard", "statsCard", "historyCard"].forEach((id) => ($(id).hidden = false));
       $("exportBtn").disabled = false;
+      $("exportObjBtn").disabled = false;
       $("reframeBtn").hidden = false;
       $("bgToggle").hidden = false;
       $("overlay").classList.add("hide");
@@ -676,6 +677,27 @@
       toast("Saved " + a.download);
     } catch (e) { console.error(e); toast("Split export failed: " + e.message, true); }
   }
+  async function doExportObj() {
+    if (!doc) return;
+    try {
+      const weld = $("objWeld") ? $("objWeld").checked : true;
+      toast("Building .obj …");
+      const base = fileName.replace(/\.3mf$/i, "");
+      const { obj, mtl } = ObjExport.build(doc, { weld, mtlName: base + ".mtl" });
+      const zip = new JSZip();
+      zip.file(base + ".obj", obj);
+      zip.file(base + ".mtl", mtl);
+      const blob = await zip.generateAsync({
+        type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 },
+      });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = base + "_paint.zip";
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+      toast("Saved " + a.download);
+    } catch (e) { console.error(e); toast("OBJ export failed: " + e.message, true); }
+  }
   async function doExport() {
     if (!doc) return;
     try {
@@ -740,6 +762,7 @@
   $("undoBtn").addEventListener("click", doUndo);
   $("redoBtn").addEventListener("click", doRedo);
   $("exportBtn").addEventListener("click", doExport);
+  $("exportObjBtn").addEventListener("click", doExportObj);
   $("exportSplitBtn").addEventListener("click", doExportSplit);
   $("capMethod").addEventListener("change", () => {
     if (!doc || !splitParts.length) return;

@@ -14,6 +14,7 @@ function loadModules() {
     "vendor/three.min.js",
     "vendor/poly2tri.min.js",
     "js/paint.js",
+    "js/objexport.js",
     "js/subgraph.js",
     "js/select.js",
     "js/cleanup.js",
@@ -28,6 +29,7 @@ function loadModules() {
   }
   return {
     Paint: sandbox.Paint,
+    ObjExport: sandbox.ObjExport,
     Cleanup: sandbox.Cleanup,
     Split: sandbox.Split,
     Caps: sandbox.Caps,
