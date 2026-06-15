@@ -45,8 +45,9 @@ body {
 .ic { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; display: block; flex: 0 0 auto; }
 
 .tools { display: flex; gap: 7px; justify-self: center; }
+.tooldiv { width: 1px; height: 24px; background: var(--line); margin: 0 4px; flex: 0 0 auto; align-self: center; }
 .tool {
-  display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px;
+  display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 13px;
   font: inherit; font-size: 13px; font-weight: 600; border-radius: 11px; color: var(--text);
   background: var(--card); border: 1px solid var(--line); cursor: pointer; transition: .15s;
 }
@@ -55,8 +56,6 @@ body {
   background: linear-gradient(140deg, var(--accent-2), var(--accent-d)); border-color: transparent;
   color: #fff; box-shadow: 0 8px 16px -8px var(--accent);
 }
-.tool .kbd { font-family: inherit; font-size: 10.5px; line-height: 1; font-weight: 700; padding: 3px 5px; border-radius: 5px; background: var(--card-2); color: var(--muted); border: 1px solid var(--line); }
-.tool.active .kbd { background: rgba(255, 255, 255, 0.18); color: #fff; border-color: transparent; }
 
 .topactions { display: flex; gap: 8px; align-items: center; justify-self: end; }
 .icon { width: 40px; height: 40px; padding: 0; flex: 0 0 auto; display: grid; place-items: center; }
