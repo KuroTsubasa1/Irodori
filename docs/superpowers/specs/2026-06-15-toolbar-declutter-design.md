@@ -1,7 +1,7 @@
 # Toolbar Declutter (Batch N) — Design
 
 **Date:** 2026-06-15
-**Status:** Approved (ready for implementation plan)
+**Status:** Shipped (Batch N).
 
 ## Problem
 
