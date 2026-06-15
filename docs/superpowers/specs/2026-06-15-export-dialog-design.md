@@ -1,7 +1,7 @@
 # Export Dialog (Batch O) — Design
 
 **Date:** 2026-06-15
-**Status:** Approved (ready for implementation plan)
+**Status:** Shipped (Batch O).
 
 ## Problem
 
