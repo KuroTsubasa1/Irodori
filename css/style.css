@@ -287,4 +287,8 @@ button:disabled { opacity: .42; cursor: not-allowed; transform: none; }
 .modal-card { width: min(360px, 92vw); display: flex; flex-direction: column; gap: 12px; padding: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 24px 60px -20px rgba(16, 24, 40, 0.5); }
 .modal-card h2 { margin: 0; font-size: 16px; }
 .modal-card .btnrow { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+#exportFmt button { width: auto; padding: 7px 12px; } /* word chips (3MF/OBJ/Split), not X/Y/Z letters */
 #exportFmt button[disabled] { opacity: .4; cursor: not-allowed; }
+#exportDesc { margin: 0; }
+#exportName { width: 100%; background: #fff; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 13px; }
+#exportName:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
