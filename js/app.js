@@ -166,7 +166,6 @@
         Viewer.subTriangleCount().toLocaleString() + " sub-triangles · " + doc.filaments.length + " filaments";
       ["objectsCard", "filamentCard", "cleanCard", "statsCard", "historyCard"].forEach((id) => ($(id).hidden = false));
       $("exportBtn").disabled = false;
-      $("exportObjBtn").disabled = false;
       $("reframeBtn").hidden = false;
       $("bgToggle").hidden = false;
       $("orientBtn").hidden = false;
@@ -711,6 +710,39 @@
     } catch (e) { console.error(e); toast("Export failed: " + e.message, true); }
   }
 
+  // ---------- export dialog ----------
+  function exportDescribe(fmt) {
+    if (fmt === "obj") return "Colored mesh as .obj + .mtl, zipped — for other tools.";
+    if (fmt === "split") return "Each painted region as its own watertight solid (" + splitParts.length + " parts).";
+    return "Repaired model, ready to re-slice.";
+  }
+  function selectExportFmt(fmt) {
+    document.querySelectorAll("#exportFmt button").forEach((b) => b.classList.toggle("on", b.dataset.fmt === fmt));
+    $("exportDesc").textContent = exportDescribe(fmt);
+    $("exportWeldWrap").hidden = fmt !== "obj";
+    $("exportName").value = exportDefaultName(fmt);
+  }
+  function openExportDialog() {
+    if (!doc) return;
+    const splitChip = document.querySelector('#exportFmt button[data-fmt="split"]');
+    const noParts = splitParts.length === 0;
+    splitChip.disabled = noParts;
+    splitChip.title = noParts ? "Split a region first" : "";
+    selectExportFmt("3mf");
+    $("exportModal").hidden = false;
+    $("exportName").focus();
+  }
+  function closeExportDialog() { $("exportModal").hidden = true; }
+  function runExport() {
+    const active = document.querySelector("#exportFmt button.on");
+    const fmt = active ? active.dataset.fmt : "3mf";
+    const name = $("exportName").value.trim() || exportDefaultName(fmt);
+    closeExportDialog();
+    if (fmt === "obj") doExportObj(name, $("exportWeld").checked);
+    else if (fmt === "split") doExportSplit(name);
+    else doExport(name);
+  }
+
   // ---------- events ----------
   $("fileInput").addEventListener("change", (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); });
   $("addColorInput").addEventListener("change", (e) => {
@@ -757,9 +789,13 @@
   $("resetBtn").addEventListener("click", doReset);
   $("undoBtn").addEventListener("click", doUndo);
   $("redoBtn").addEventListener("click", doRedo);
-  $("exportBtn").addEventListener("click", () => doExport(exportDefaultName("3mf")));
-  $("exportObjBtn").addEventListener("click", () => doExportObj(exportDefaultName("obj"), $("objWeld").checked));
-  $("exportSplitBtn").addEventListener("click", () => doExportSplit(exportDefaultName("split")));
+  $("exportBtn").addEventListener("click", openExportDialog);
+  document.querySelectorAll("#exportFmt button").forEach((b) =>
+    b.addEventListener("click", () => { if (!b.disabled) selectExportFmt(b.dataset.fmt); })
+  );
+  $("exportCancel").addEventListener("click", closeExportDialog);
+  $("exportGo").addEventListener("click", runExport);
+  $("exportModal").addEventListener("click", (e) => { if (e.target === $("exportModal")) closeExportDialog(); });
   $("capMethod").addEventListener("change", () => {
     if (!doc || !splitParts.length) return;
     const method = $("capMethod").value;
@@ -789,6 +825,7 @@
 
   document.addEventListener("keydown", (e) => {
     if (!doc) return;
+    if (!$("exportModal").hidden) { if (e.key === "Escape") closeExportDialog(); return; }
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
     if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); doRedo(); return; }
