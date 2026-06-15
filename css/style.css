@@ -71,8 +71,6 @@ body {
 .opt[hidden] { display: none; }
 .optlabel { font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .opt input[type="range"] { width: 190px; }
-.opt .rotgrid { display: flex; gap: 6px; }
-.opt .rotgrid button { width: 46px; padding: 8px 0; flex: 0 0 auto; }
 .slim { flex: 0 0 auto; width: auto; padding: 8px 13px; }
 .sizedot {
   display: inline-block; width: 14px; height: 14px; border-radius: 50%;

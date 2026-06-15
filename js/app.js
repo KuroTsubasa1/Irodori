@@ -796,11 +796,11 @@
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
     if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); doRedo(); return; }
-    if (e.key === "Escape") { $("orientPop").hidden = true; setTool("orbit"); return; }
     // tool shortcuts: modifier-free, ignored while typing in a field
     if (mod || e.altKey) return;
     const tag = (e.target && e.target.tagName) || "";
     if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+    if (e.key === "Escape") { $("orientPop").hidden = true; setTool("orbit"); return; }
     const k = e.key.toLowerCase();
     if (k === "r") { e.preventDefault(); $("orientPop").hidden = !$("orientPop").hidden; return; }
     const tool = { o: "orbit", b: "brush", n: "ring", f: "fill", s: "split", c: "cut" }[k];
