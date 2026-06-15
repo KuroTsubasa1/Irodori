@@ -727,7 +727,7 @@
     updateStats();
     toast("Added color " + hex.toUpperCase());
   });
-  document.querySelectorAll("#toolbar .tool").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.tool)));
+  document.querySelectorAll("#toolbar .tool").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.tool === activeTool ? "orbit" : b.dataset.tool)));
   document.querySelectorAll("#orientPop [data-rot]").forEach((b) =>
     b.addEventListener("click", () => { const [ax, d] = b.dataset.rot.split(":"); doRotate({ x: 0, y: 1, z: 2 }[ax], +d); })
   );
@@ -796,6 +796,7 @@
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
     if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); doRedo(); return; }
+    if (e.key === "Escape") { $("orientPop").hidden = true; setTool("orbit"); return; }
     // tool shortcuts: modifier-free, ignored while typing in a field
     if (mod || e.altKey) return;
     const tag = (e.target && e.target.tagName) || "";
