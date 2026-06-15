@@ -64,16 +64,6 @@
           <span class="muted">Drag to rotate · scroll to zoom · right-drag to pan</span>
         </div>
 
-        <div class="opt" data-panel="rotate" hidden>
-          <span class="optlabel">Rotate 90°</span>
-          <div class="rotgrid">
-            <button data-rot="x:-1">X−</button><button data-rot="x:1">X+</button>
-            <button data-rot="y:-1">Y−</button><button data-rot="y:1">Y+</button>
-            <button data-rot="z:-1">Z−</button><button data-rot="z:1">Z+</button>
-          </div>
-          <button id="recenterBtn" class="ghost slim">Refit view</button>
-        </div>
-
         <div class="opt" data-panel="brush" hidden>
           <span class="optlabel">Brush size</span>
           <input type="range" id="brushSize" min="1" max="100" value="40" />
@@ -206,6 +196,15 @@
           <div id="toast" class="toast" hidden></div>
           <button id="reframeBtn" class="stagebtn" hidden title="Reset view">⤢</button>
           <button id="bgToggle" class="stagebtn" hidden title="Toggle background">◐</button>
+          <button id="orientBtn" class="stagebtn" hidden title="Orient — rotate the model 90° (R)">⟳</button>
+          <div id="orientPop" class="orientpop" hidden>
+            <div class="orientpop-label">Rotate 90°</div>
+            <div class="rotgrid">
+              <button data-rot="x:-1">X−</button><button data-rot="x:1">X+</button>
+              <button data-rot="y:-1">Y−</button><button data-rot="y:1">Y+</button>
+              <button data-rot="z:-1">Z−</button><button data-rot="z:1">Z+</button>
+            </div>
+          </div>
         </main>
       </div>
     </div>

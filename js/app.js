@@ -1,5 +1,5 @@
-/* app.js — UI glue: tools (orbit/rotate/brush/ring/fill), auto-clean,
- * undo/redo history, export. */
+/* app.js — UI glue: edit tools (brush/ring/fill/split/cut), orbit + model-orient,
+ * auto-clean, undo/redo history, export. */
 (function () {
   "use strict";
 
@@ -169,6 +169,7 @@
       $("exportObjBtn").disabled = false;
       $("reframeBtn").hidden = false;
       $("bgToggle").hidden = false;
+      $("orientBtn").hidden = false;
       $("overlay").classList.add("hide");
       toast("Loaded · pick a tool up top to edit");
     } catch (e) {
@@ -727,10 +728,9 @@
     toast("Added color " + hex.toUpperCase());
   });
   document.querySelectorAll("#toolbar .tool").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.tool)));
-  document.querySelectorAll("#optionsbar [data-rot]").forEach((b) =>
+  document.querySelectorAll("#orientPop [data-rot]").forEach((b) =>
     b.addEventListener("click", () => { const [ax, d] = b.dataset.rot.split(":"); doRotate({ x: 0, y: 1, z: 2 }[ax], +d); })
   );
-  $("recenterBtn").addEventListener("click", () => Viewer.frame());
   $("brushSize").addEventListener("input", () => {
     updateSizeDots();
     if (activeTool === "brush" && lastHit) onHover(lastHit);
@@ -774,6 +774,11 @@
   });
   $("reframeBtn").addEventListener("click", () => Viewer.frame());
   $("bgToggle").addEventListener("click", () => $("stage").classList.toggle("dark"));
+  $("orientBtn").addEventListener("click", (e) => { e.stopPropagation(); $("orientPop").hidden = !$("orientPop").hidden; });
+  document.addEventListener("click", (e) => {
+    const pop = $("orientPop");
+    if (!pop.hidden && !pop.contains(e.target) && e.target !== $("orientBtn")) pop.hidden = true;
+  });
   $("showAllBtn").addEventListener("click", showAll);
   document.querySelectorAll("#cutAxes button").forEach((b) =>
     b.addEventListener("click", () => {
@@ -795,7 +800,9 @@
     if (mod || e.altKey) return;
     const tag = (e.target && e.target.tagName) || "";
     if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
-    const tool = { o: "orbit", r: "rotate", b: "brush", n: "ring", f: "fill", s: "split", c: "cut" }[e.key.toLowerCase()];
+    const k = e.key.toLowerCase();
+    if (k === "r") { e.preventDefault(); $("orientPop").hidden = !$("orientPop").hidden; return; }
+    const tool = { o: "orbit", b: "brush", n: "ring", f: "fill", s: "split", c: "cut" }[k];
     if (tool) { e.preventDefault(); setTool(tool); }
   });
 

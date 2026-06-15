@@ -250,6 +250,16 @@ button:disabled { opacity: .42; cursor: not-allowed; transform: none; }
 #bgToggle { top: 66px; }
 #stage.dark .stagebtn { background: rgba(20, 24, 33, 0.55); border-color: rgba(255, 255, 255, 0.14); color: #fff; }
 #stage.dark .stagebtn:hover { background: rgba(20, 24, 33, 0.82); border-color: var(--accent); color: var(--accent); }
+#orientBtn { top: 116px; }
+.orientpop {
+  position: absolute; right: 70px; top: 108px; z-index: 7; padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.96); border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 12px;
+  box-shadow: 0 12px 30px -10px rgba(16, 24, 40, 0.35); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.orientpop[hidden] { display: none; }
+.orientpop-label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px; }
+.orientpop .rotgrid button { padding: 8px 0; }
+#stage.dark .orientpop { background: rgba(20, 24, 33, 0.85); border-color: rgba(255, 255, 255, 0.14); color: #fff; }
 #reframeBtn:active { transform: rotate(-90deg); }
 
 /* ---------- animations ---------- */
