@@ -664,54 +664,50 @@
   const doUndo = () => jumpTo(histIndex - 1);
   const doRedo = () => jumpTo(histIndex + 1);
 
-  async function doExportSplit() {
+  function exportBase() { return fileName.replace(/\.3mf$/i, ""); }
+  function exportDefaultName(fmt) {
+    const base = exportBase();
+    return fmt === "obj" ? base + "_paint.zip" : fmt === "split" ? base + "_split.3mf" : base + "_fixed.3mf";
+  }
+  function triggerDownload(blob, name) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast("Saved " + name);
+  }
+
+  async function doExportSplit(outName) {
     if (!doc) return;
     if (!splitParts.length) { toast("Split a region first", true); return; }
     try {
       toast("Packing split .3mf …");
-      const blob = await ThreeMF.exportSplit(doc, splitParts);
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = fileName.replace(/\.3mf$/i, "") + "_split.3mf";
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      toast("Saved " + a.download);
+      triggerDownload(await ThreeMF.exportSplit(doc, splitParts), outName);
     } catch (e) { console.error(e); toast("Split export failed: " + e.message, true); }
   }
-  async function doExportObj() {
+  async function doExportObj(outName, weld) {
     if (!doc) return;
     try {
-      const weld = $("objWeld") ? $("objWeld").checked : true;
       toast("Building .obj …");
-      const base = fileName.replace(/\.3mf$/i, "");
-      const { obj, mtl } = ObjExport.build(doc, { weld, mtlName: base + ".mtl" });
+      const zipBase = outName.replace(/\.zip$/i, "");
+      const { obj, mtl } = ObjExport.build(doc, { weld: weld !== false, mtlName: zipBase + ".mtl" });
       const zip = new JSZip();
-      zip.file(base + ".obj", obj);
-      zip.file(base + ".mtl", mtl);
+      zip.file(zipBase + ".obj", obj);
+      zip.file(zipBase + ".mtl", mtl);
       const blob = await zip.generateAsync({
         type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 },
       });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = base + "_paint.zip";
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      toast("Saved " + a.download);
+      triggerDownload(blob, outName);
     } catch (e) { console.error(e); toast("OBJ export failed: " + e.message, true); }
   }
-  async function doExport() {
+  async function doExport(outName) {
     if (!doc) return;
     try {
       if (previewActive) { restore(current()); previewActive = false; render(null); }
       restore(current());
       toast("Packing .3mf …");
-      const blob = await ThreeMF.exportZip(doc);
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = fileName.replace(/\.3mf$/i, "") + "_fixed.3mf";
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      toast("Saved " + a.download);
+      triggerDownload(await ThreeMF.exportZip(doc), outName);
     } catch (e) { console.error(e); toast("Export failed: " + e.message, true); }
   }
 
@@ -761,9 +757,9 @@
   $("resetBtn").addEventListener("click", doReset);
   $("undoBtn").addEventListener("click", doUndo);
   $("redoBtn").addEventListener("click", doRedo);
-  $("exportBtn").addEventListener("click", doExport);
-  $("exportObjBtn").addEventListener("click", doExportObj);
-  $("exportSplitBtn").addEventListener("click", doExportSplit);
+  $("exportBtn").addEventListener("click", () => doExport(exportDefaultName("3mf")));
+  $("exportObjBtn").addEventListener("click", () => doExportObj(exportDefaultName("obj"), $("objWeld").checked));
+  $("exportSplitBtn").addEventListener("click", () => doExportSplit(exportDefaultName("split")));
   $("capMethod").addEventListener("change", () => {
     if (!doc || !splitParts.length) return;
     const method = $("capMethod").value;
