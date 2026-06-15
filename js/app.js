@@ -689,7 +689,7 @@
     if (!doc) return;
     try {
       toast("Building .obj …");
-      const zipBase = outName.replace(/\.zip$/i, "");
+      const zipBase = outName.replace(/\.[^.]+$/, "");
       const { obj, mtl } = ObjExport.build(doc, { weld: weld !== false, mtlName: zipBase + ".mtl" });
       const zip = new JSZip();
       zip.file(zipBase + ".obj", obj);
