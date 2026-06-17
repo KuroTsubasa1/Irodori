@@ -6,3 +6,6 @@
 .playwright-mcp/
 
 .DS_Store
+
+# Visual brainstorming companion
+.superpowers/

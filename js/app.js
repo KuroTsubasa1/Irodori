@@ -1,5 +1,5 @@
-/* app.js — UI glue: tools (orbit/rotate/brush/ring/fill), auto-clean,
- * undo/redo history, export. */
+/* app.js — UI glue: edit tools (brush/ring/fill/split/cut), orbit + model-orient,
+ * auto-clean, undo/redo history, export. */
 (function () {
   "use strict";
 
@@ -166,9 +166,9 @@
         Viewer.subTriangleCount().toLocaleString() + " sub-triangles · " + doc.filaments.length + " filaments";
       ["objectsCard", "filamentCard", "cleanCard", "statsCard", "historyCard"].forEach((id) => ($(id).hidden = false));
       $("exportBtn").disabled = false;
-      $("exportObjBtn").disabled = false;
       $("reframeBtn").hidden = false;
       $("bgToggle").hidden = false;
+      $("orientBtn").hidden = false;
       $("overlay").classList.add("hide");
       toast("Loaded · pick a tool up top to edit");
     } catch (e) {
@@ -663,55 +663,84 @@
   const doUndo = () => jumpTo(histIndex - 1);
   const doRedo = () => jumpTo(histIndex + 1);
 
-  async function doExportSplit() {
+  function exportBase() { return fileName.replace(/\.3mf$/i, ""); }
+  function exportDefaultName(fmt) {
+    const base = exportBase();
+    return fmt === "obj" ? base + "_paint.zip" : fmt === "split" ? base + "_split.3mf" : base + "_fixed.3mf";
+  }
+  function triggerDownload(blob, name) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast("Saved " + name);
+  }
+
+  async function doExportSplit(outName) {
     if (!doc) return;
     if (!splitParts.length) { toast("Split a region first", true); return; }
     try {
       toast("Packing split .3mf …");
-      const blob = await ThreeMF.exportSplit(doc, splitParts);
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = fileName.replace(/\.3mf$/i, "") + "_split.3mf";
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      toast("Saved " + a.download);
+      triggerDownload(await ThreeMF.exportSplit(doc, splitParts), outName);
     } catch (e) { console.error(e); toast("Split export failed: " + e.message, true); }
   }
-  async function doExportObj() {
+  async function doExportObj(outName, weld) {
     if (!doc) return;
     try {
-      const weld = $("objWeld") ? $("objWeld").checked : true;
       toast("Building .obj …");
-      const base = fileName.replace(/\.3mf$/i, "");
-      const { obj, mtl } = ObjExport.build(doc, { weld, mtlName: base + ".mtl" });
+      const zipBase = outName.replace(/\.[^.]+$/, "");
+      const { obj, mtl } = ObjExport.build(doc, { weld: weld !== false, mtlName: zipBase + ".mtl" });
       const zip = new JSZip();
-      zip.file(base + ".obj", obj);
-      zip.file(base + ".mtl", mtl);
+      zip.file(zipBase + ".obj", obj);
+      zip.file(zipBase + ".mtl", mtl);
       const blob = await zip.generateAsync({
         type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 },
       });
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = base + "_paint.zip";
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      toast("Saved " + a.download);
+      triggerDownload(blob, outName);
     } catch (e) { console.error(e); toast("OBJ export failed: " + e.message, true); }
   }
-  async function doExport() {
+  async function doExport(outName) {
     if (!doc) return;
     try {
       if (previewActive) { restore(current()); previewActive = false; render(null); }
       restore(current());
       toast("Packing .3mf …");
-      const blob = await ThreeMF.exportZip(doc);
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = fileName.replace(/\.3mf$/i, "") + "_fixed.3mf";
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      toast("Saved " + a.download);
+      triggerDownload(await ThreeMF.exportZip(doc), outName);
     } catch (e) { console.error(e); toast("Export failed: " + e.message, true); }
+  }
+
+  // ---------- export dialog ----------
+  function exportDescribe(fmt) {
+    if (fmt === "obj") return "Colored mesh as .obj + .mtl, zipped — for other tools.";
+    if (fmt === "split") return "Each painted region as its own watertight solid (" + splitParts.length + " parts).";
+    return "Repaired model, ready to re-slice.";
+  }
+  function selectExportFmt(fmt) {
+    document.querySelectorAll("#exportFmt button").forEach((b) => b.classList.toggle("on", b.dataset.fmt === fmt));
+    $("exportDesc").textContent = exportDescribe(fmt);
+    $("exportWeldWrap").hidden = fmt !== "obj";
+    $("exportName").value = exportDefaultName(fmt);
+  }
+  function openExportDialog() {
+    if (!doc) return;
+    const splitChip = document.querySelector('#exportFmt button[data-fmt="split"]');
+    const noParts = splitParts.length === 0;
+    splitChip.disabled = noParts;
+    splitChip.title = noParts ? "Split a region first" : "";
+    selectExportFmt("3mf");
+    $("exportModal").hidden = false;
+    $("exportName").focus();
+  }
+  function closeExportDialog() { $("exportModal").hidden = true; }
+  function runExport() {
+    const active = document.querySelector("#exportFmt button.on");
+    const fmt = active ? active.dataset.fmt : "3mf";
+    const name = $("exportName").value.trim() || exportDefaultName(fmt);
+    closeExportDialog();
+    if (fmt === "obj") doExportObj(name, $("exportWeld").checked);
+    else if (fmt === "split") doExportSplit(name);
+    else doExport(name);
   }
 
   // ---------- events ----------
@@ -726,11 +755,10 @@
     updateStats();
     toast("Added color " + hex.toUpperCase());
   });
-  document.querySelectorAll("#toolbar .tool").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.tool)));
-  document.querySelectorAll("#optionsbar [data-rot]").forEach((b) =>
+  document.querySelectorAll("#toolbar .tool").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.tool === activeTool ? "orbit" : b.dataset.tool)));
+  document.querySelectorAll("#orientPop [data-rot]").forEach((b) =>
     b.addEventListener("click", () => { const [ax, d] = b.dataset.rot.split(":"); doRotate({ x: 0, y: 1, z: 2 }[ax], +d); })
   );
-  $("recenterBtn").addEventListener("click", () => Viewer.frame());
   $("brushSize").addEventListener("input", () => {
     updateSizeDots();
     if (activeTool === "brush" && lastHit) onHover(lastHit);
@@ -761,9 +789,13 @@
   $("resetBtn").addEventListener("click", doReset);
   $("undoBtn").addEventListener("click", doUndo);
   $("redoBtn").addEventListener("click", doRedo);
-  $("exportBtn").addEventListener("click", doExport);
-  $("exportObjBtn").addEventListener("click", doExportObj);
-  $("exportSplitBtn").addEventListener("click", doExportSplit);
+  $("exportBtn").addEventListener("click", openExportDialog);
+  document.querySelectorAll("#exportFmt button").forEach((b) =>
+    b.addEventListener("click", () => { if (!b.disabled) selectExportFmt(b.dataset.fmt); })
+  );
+  $("exportCancel").addEventListener("click", closeExportDialog);
+  $("exportGo").addEventListener("click", runExport);
+  $("exportModal").addEventListener("click", (e) => { if (e.target === $("exportModal")) closeExportDialog(); });
   $("capMethod").addEventListener("change", () => {
     if (!doc || !splitParts.length) return;
     const method = $("capMethod").value;
@@ -774,6 +806,11 @@
   });
   $("reframeBtn").addEventListener("click", () => Viewer.frame());
   $("bgToggle").addEventListener("click", () => $("stage").classList.toggle("dark"));
+  $("orientBtn").addEventListener("click", (e) => { e.stopPropagation(); $("orientPop").hidden = !$("orientPop").hidden; });
+  document.addEventListener("click", (e) => {
+    const pop = $("orientPop");
+    if (!pop.hidden && !pop.contains(e.target) && e.target !== $("orientBtn")) pop.hidden = true;
+  });
   $("showAllBtn").addEventListener("click", showAll);
   document.querySelectorAll("#cutAxes button").forEach((b) =>
     b.addEventListener("click", () => {
@@ -788,6 +825,7 @@
 
   document.addEventListener("keydown", (e) => {
     if (!doc) return;
+    if (!$("exportModal").hidden) { if (e.key === "Escape") closeExportDialog(); return; }
     const mod = e.metaKey || e.ctrlKey;
     if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
     if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); doRedo(); return; }
@@ -795,7 +833,10 @@
     if (mod || e.altKey) return;
     const tag = (e.target && e.target.tagName) || "";
     if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
-    const tool = { o: "orbit", r: "rotate", b: "brush", n: "ring", f: "fill", s: "split", c: "cut" }[e.key.toLowerCase()];
+    if (e.key === "Escape") { $("orientPop").hidden = true; setTool("orbit"); return; }
+    const k = e.key.toLowerCase();
+    if (k === "r") { e.preventDefault(); $("orientPop").hidden = !$("orientPop").hidden; return; }
+    const tool = { o: "orbit", b: "brush", n: "ring", f: "fill", s: "split", c: "cut" }[k];
     if (tool) { e.preventDefault(); setTool(tool); }
   });
 
