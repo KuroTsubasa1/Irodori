@@ -4,6 +4,7 @@
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>彩 Irodori — 3MF Color Fixer</title>
+    <link rel="icon" type="image/svg+xml" href="docs/assets/logo.svg" />
     <link rel="stylesheet" href="css/style.css" />
   </head>
   <body>
@@ -16,25 +17,26 @@
         </div>
 
         <div class="tools" id="toolbar">
-          <button class="tool active" data-tool="orbit" title="Orbit — look around">
-            <svg class="ic" viewBox="0 0 24 24"><ellipse cx="12" cy="12" rx="9.5" ry="4"/><ellipse cx="12" cy="12" rx="4" ry="9.5"/></svg>
-            <span>Orbit</span>
-          </button>
-          <button class="tool" data-tool="rotate" title="Rotate / orient the model">
-            <svg class="ic" viewBox="0 0 24 24"><path d="M20.5 12a8.5 8.5 0 1 1-2.6-6.1"/><path d="M20.6 4.6V9H16.2"/></svg>
-            <span>Rotate</span>
-          </button>
-          <button class="tool" data-tool="brush" title="Brush — paint by dragging">
+          <button class="tool" data-tool="brush" title="Brush (B) — paint by dragging">
             <svg class="ic" viewBox="0 0 24 24"><path d="M3 21c2.2 0 3.3-1.1 3.8-2.6"/><path d="M6.7 18.4c-1-1-1-2.5 0-3.5L15 6.6l2.9 2.9-8.3 8.3c-1 1-2.6 1-3.6 0z"/><path d="M14 5.6l2.4-2.4a1.9 1.9 0 0 1 2.7 2.7L16.7 8.3z"/></svg>
             <span>Brush</span>
           </button>
-          <button class="tool" data-tool="ring" title="Ring — wrap a colored band">
+          <button class="tool" data-tool="ring" title="Ring (N) — wrap a colored band">
             <svg class="ic" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><circle cx="12" cy="12" r="3.4"/></svg>
             <span>Ring</span>
           </button>
-          <button class="tool" data-tool="fill" title="Fill a same-color region">
+          <button class="tool" data-tool="fill" title="Fill (F) a same-color region">
             <svg class="ic" viewBox="0 0 24 24"><path d="M10.5 3.6l8 8-6.2 6.2a2.4 2.4 0 0 1-3.4 0L4 13a2.4 2.4 0 0 1 0-3.4z"/><path d="M8.9 5.2 7.1 3.4"/><path d="M4.7 12.4h13.6"/><path d="M20 13.6c1 1.3 1 2.8 0 3.8s-2.3.3-2.3-1.4 1.3-2.4 2.3-2.4z"/></svg>
             <span>Fill</span>
+          </button>
+          <span class="tooldiv" aria-hidden="true"></span>
+          <button class="tool" data-tool="split" title="Split (S) a color into its own solid">
+            <svg class="ic" viewBox="0 0 24 24"><path d="M12 3v18"/><path d="M5 8l-2 4 2 4"/><path d="M19 8l2 4-2 4"/></svg>
+            <span>Split</span>
+          </button>
+          <button class="tool" data-tool="cut" title="Cut (C) — plane cut into two solids">
+            <svg class="ic" viewBox="0 0 24 24"><path d="M4 5l16 14"/><path d="M20 5L4 19"/><circle cx="5" cy="19" r="2"/><circle cx="19" cy="19" r="2"/></svg>
+            <span>Cut</span>
           </button>
         </div>
 
@@ -58,20 +60,16 @@
           <span class="muted">Drag to rotate · scroll to zoom · right-drag to pan</span>
         </div>
 
-        <div class="opt" data-panel="rotate" hidden>
-          <span class="optlabel">Rotate 90°</span>
-          <div class="rotgrid">
-            <button data-rot="x:-1">X−</button><button data-rot="x:1">X+</button>
-            <button data-rot="y:-1">Y−</button><button data-rot="y:1">Y+</button>
-            <button data-rot="z:-1">Z−</button><button data-rot="z:1">Z+</button>
-          </div>
-          <button id="recenterBtn" class="ghost slim">Refit view</button>
-        </div>
-
         <div class="opt" data-panel="brush" hidden>
           <span class="optlabel">Brush size</span>
-          <input type="range" id="brushSize" min="1" max="100" value="16" />
+          <input type="range" id="brushSize" min="1" max="100" value="40" />
           <span class="sizedot" id="brushPrev"></span>
+          <span class="optlabel">Mirror</span>
+          <div class="axes" id="symAxes">
+            <button type="button" data-axis="0" title="Mirror across X">X</button>
+            <button type="button" data-axis="1" title="Mirror across Y">Y</button>
+            <button type="button" data-axis="2" title="Mirror across Z">Z</button>
+          </div>
         </div>
 
         <div class="opt" data-panel="ring" hidden>
@@ -81,10 +79,47 @@
         </div>
 
         <div class="opt" data-panel="fill" hidden>
-          <label class="check"><input type="checkbox" id="fillAuto" checked /><span>Auto — use the surrounding color</span></label>
+          <span class="optlabel">Mode</span>
+          <div class="axes" id="fillModes">
+            <button type="button" data-mode="color" class="on" title="Fill the connected same-color region">Color</button>
+            <button type="button" data-mode="smart" title="Fill up to sharp creases, ignoring paint">Smart</button>
+          </div>
+          <label class="check" id="fillAutoWrap"><input type="checkbox" id="fillAuto" checked /><span>Auto — use the surrounding color</span></label>
+          <span class="optlabel" id="fillAngleLabel" hidden>Angle ≤ <span id="fillAngleVal">30</span>°</span>
+          <input type="range" id="fillAngle" min="1" max="90" value="30" hidden />
+        </div>
+
+        <div class="opt" data-panel="split" hidden>
+          <span class="optlabel">Cap method</span>
+          <select id="capMethod">
+            <option value="liepa" selected>Liepa (smooth)</option>
+            <option value="earcut">Earcut</option>
+            <option value="cdt">CDT (Delaunay)</option>
+            <option value="projected">Projected normal</option>
+            <option value="centroid">Centroid</option>
+          </select>
+          <span class="muted">Click a colored part to lift it out as its own solid.</span>
+        </div>
+
+        <div class="opt" data-panel="cut" hidden>
+          <span class="optlabel">Axis</span>
+          <div class="axes" id="cutAxes">
+            <button type="button" data-axis="0">X</button>
+            <button type="button" data-axis="1">Y</button>
+            <button type="button" data-axis="2" class="on">Z</button>
+          </div>
+          <span class="optlabel">Position</span>
+          <input type="range" id="cutPos" min="0" max="100" value="50" />
+          <span class="optlabel">Tilt</span>
+          <input type="range" id="cutTiltA" min="-60" max="60" value="0" />
+          <input type="range" id="cutTiltB" min="-60" max="60" value="0" />
+          <button id="cutBoth" class="secondary slim">Keep both</button>
+          <button id="cutUpper" class="ghost slim">Keep upper</button>
+          <button id="cutLower" class="ghost slim">Keep lower</button>
         </div>
 
         <div class="palette" id="palette" title="Paint color"></div>
+        <input type="color" id="addColorInput" value="#3aa6ff" style="position:fixed; width:1px; height:1px; opacity:0; border:0; padding:0; pointer-events:none" />
       </div>
 
       <div id="main">
@@ -97,6 +132,12 @@
               <span>📂 Choose a .3mf file</span>
             </label>
             <div id="fileInfo" class="muted">No file loaded yet.</div>
+          </section>
+
+          <section class="card" id="objectsCard" hidden>
+            <h2>Objects</h2>
+            <ul id="objectsList"></ul>
+            <button id="showAllBtn" class="ghost slim" hidden style="margin-top:8px">Exit isolation</button>
           </section>
 
           <section class="card" id="filamentCard" hidden>
@@ -150,16 +191,55 @@
           <div id="toast" class="toast" hidden></div>
           <button id="reframeBtn" class="stagebtn" hidden title="Reset view">⤢</button>
           <button id="bgToggle" class="stagebtn" hidden title="Toggle background">◐</button>
+          <button id="orientBtn" class="stagebtn" hidden title="Orient — rotate the model 90° (R)">⟳</button>
+          <div id="orientPop" class="orientpop" hidden>
+            <div class="orientpop-label">Rotate 90°</div>
+            <div class="rotgrid">
+              <button data-rot="x:-1">X−</button><button data-rot="x:1">X+</button>
+              <button data-rot="y:-1">Y−</button><button data-rot="y:1">Y+</button>
+              <button data-rot="z:-1">Z−</button><button data-rot="z:1">Z+</button>
+            </div>
+          </div>
         </main>
+      </div>
+
+      <div id="exportModal" class="modal" hidden>
+        <div class="modal-card" role="dialog" aria-modal="true" aria-label="Export">
+          <h2>Export</h2>
+          <span class="optlabel">Format</span>
+          <div class="axes" id="exportFmt">
+            <button type="button" data-fmt="3mf" class="on">3MF</button>
+            <button type="button" data-fmt="obj">OBJ</button>
+            <button type="button" data-fmt="split">Split</button>
+          </div>
+          <p id="exportDesc" class="hint"></p>
+          <label class="check" id="exportWeldWrap" hidden><input type="checkbox" id="exportWeld" checked /><span>Weld vertices — smaller file, smooth shading</span></label>
+          <div class="field">
+            <label for="exportName">Output name</label>
+            <input type="text" id="exportName" />
+          </div>
+          <div class="btnrow">
+            <button id="exportCancel" class="ghost">Cancel</button>
+            <button id="exportGo" class="primary">Export</button>
+          </div>
+        </div>
       </div>
     </div>
 
     <script src="vendor/three.min.js"></script>
     <script src="vendor/OrbitControls.js"></script>
     <script src="vendor/jszip.min.js"></script>
+    <script src="vendor/poly2tri.min.js"></script>
     <script src="js/paint.js"></script>
+    <script src="js/objexport.js"></script>
     <script src="js/threemf.js"></script>
+    <script src="js/subgraph.js"></script>
+    <script src="js/select.js"></script>
     <script src="js/cleanup.js"></script>
+    <script src="js/liepa.js"></script>
+    <script src="js/caps.js"></script>
+    <script src="js/split.js"></script>
+    <script src="js/planecut.js"></script>
     <script src="js/viewer.js"></script>
     <script src="js/app.js"></script>
   </body>

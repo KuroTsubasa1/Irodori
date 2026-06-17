@@ -19,6 +19,12 @@
   let meshFaceOffset = []; // global face offset per mesh
   let meshSubOffset = []; // global sub-triangle offset per mesh (+sentinel)
   let totalSub = 0;
+  let renderMap = [];    // per mesh: rendered-sub index -> original localSub
+  let origToRender = []; // per mesh: Map<original localSub, rendered-sub index>
+  let splitObjs = [];    // [{ mesh, target:THREE.Vector3, cur:THREE.Vector3 }]
+  let remainderCapObjs = []; // separate double-sided meshes that fill split holes
+  let claimedSets = [];  // per mesh: Set<localSub> hidden from the main mesh
+  let visibleMeshes = null; // Set<meshIndex> to render, or null = all
 
   // picking
   let raycaster, mouse;
@@ -29,6 +35,7 @@
     painting = false,
     moveRaf = false,
     lastMove = null;
+  let altOrbit = false; // Alt held in paint mode -> temporary left-drag orbit
   // brush/ring cursor preview
   let cursorLoop = null,
     hoverEnabled = false,
@@ -38,6 +45,8 @@
     tmpQ = new THREE.Quaternion();
 
   const HIGHLIGHT = new THREE.Color("#1fe3ff").convertSRGBToLinear();
+  let previewSubs = null; // global sub indices tinted for the split hover preview
+  const PREVIEW = HIGHLIGHT; // split hover preview reuses the auto-clean highlight cyan
 
   function init(container) {
     scene = new THREE.Scene();
@@ -77,12 +86,27 @@
     raycaster = new THREE.Raycaster();
     mouse = new THREE.Vector2();
     const el = renderer.domElement;
+    // Fill-parity navigation for the brush: decide per press what the left
+    // button does — paint when the press starts on the model, orbit when it
+    // starts on empty background. Capture phase on the container so the
+    // decision lands before OrbitControls reads the event.
+    container.addEventListener(
+      "pointerdown",
+      (e) => {
+        if (toolMode !== "paint" || e.button !== 0 || altOrbit) return;
+        const hit = pick(e.clientX, e.clientY);
+        controls.mouseButtons.LEFT = hit ? null : THREE.MOUSE.ROTATE;
+      },
+      true
+    );
     el.addEventListener("pointerdown", (e) => {
       pointerDown = { x: e.clientX, y: e.clientY };
-      if (toolMode === "paint" && e.button === 0 && paintCb) {
-        painting = true;
+      if (toolMode === "paint" && e.button === 0 && paintCb && !altOrbit) {
         const hit = pick(e.clientX, e.clientY);
-        if (hit && paintCb.down) paintCb.down(hit);
+        if (hit) {
+          painting = true;
+          if (paintCb.down) paintCb.down(hit);
+        }
       }
     });
     el.addEventListener("pointermove", (e) => {
@@ -117,17 +141,41 @@
     });
 
     window.addEventListener("resize", () => onResize(container));
+    window.addEventListener("keydown", (e) => {
+      if (e.key === "Alt" && toolMode === "paint" && !altOrbit) {
+        altOrbit = true;
+        controls.mouseButtons.LEFT = THREE.MOUSE.ROTATE;
+        renderer.domElement.style.cursor = "grab";
+      }
+    });
+    window.addEventListener("keyup", (e) => {
+      if (e.key === "Alt" && altOrbit) {
+        altOrbit = false;
+        if (toolMode === "paint") {
+          controls.mouseButtons.LEFT = null;
+          renderer.domElement.style.cursor = "crosshair";
+        }
+      }
+    });
+    window.addEventListener("blur", () => {
+      if (altOrbit) {
+        altOrbit = false;
+        if (toolMode === "paint") { controls.mouseButtons.LEFT = null; renderer.domElement.style.cursor = "crosshair"; }
+      }
+    });
     animate();
   }
 
   // Tool/interaction mode: 'orbit' | 'pick' (click) | 'paint' (drag).
   function setTool(mode) {
     toolMode = mode;
+    altOrbit = false;
     if (!controls) return;
     const M = THREE.MOUSE;
     if (mode === "paint") {
-      // left paints, right-drag rotates
-      controls.mouseButtons = { LEFT: null, MIDDLE: M.DOLLY, RIGHT: M.ROTATE };
+      // fill-parity navigation: left paints on the model / orbits from the
+      // background (per-press dispatch in init), right-drag pans, middle zooms
+      controls.mouseButtons = { LEFT: null, MIDDLE: M.DOLLY, RIGHT: M.PAN };
       renderer.domElement.style.cursor = "crosshair";
     } else {
       controls.mouseButtons = { LEFT: M.ROTATE, MIDDLE: M.DOLLY, RIGHT: M.PAN };
@@ -137,8 +185,14 @@
   function onPaint(handlers) {
     paintCb = handlers;
   }
+  // Map an original (graph) sub index to its rendered slot. Returns -1 when the
+  // sub is claimed by a split part (not present in the main mesh), so callers
+  // that recolor live (paintSubs) skip it.
   function toGlobalSub(meshIndex, localSub) {
-    return meshSubOffset[meshIndex] + localSub;
+    const map = origToRender[meshIndex];
+    if (!map) return -1;
+    const r = map.get(localSub);
+    return r === undefined ? -1 : meshSubOffset[meshIndex] + r;
   }
   // Live recolor of specific sub-triangles (no rebuild) — used while brushing.
   function paintSubs(globalSubs, state) {
@@ -146,13 +200,42 @@
     const col = linColor(state);
     const colors = colorAttr.array;
     for (let i = 0; i < globalSubs.length; i++) {
-      const o = globalSubs[i] * 9;
+      const gi = globalSubs[i];
+      if (gi < 0) continue; // claimed-by-split sub: not in the main mesh
+      const o = gi * 9;
       for (let k = 0; k < 9; k += 3) {
         colors[o + k] = col.r;
         colors[o + k + 1] = col.g;
         colors[o + k + 2] = col.b;
       }
     }
+    colorAttr.needsUpdate = true;
+  }
+
+  // Tint the given global sub-triangles for the split hover preview.
+  function setPreview(globalSubs) {
+    if (!colorAttr) return;
+    clearPreview();
+    const colors = colorAttr.array;
+    for (const gi of globalSubs) {
+      if (gi < 0) continue;
+      const o = gi * 9;
+      for (let k = 0; k < 9; k += 3) { colors[o + k] = PREVIEW.r; colors[o + k + 1] = PREVIEW.g; colors[o + k + 2] = PREVIEW.b; }
+    }
+    previewSubs = globalSubs;
+    colorAttr.needsUpdate = true;
+  }
+  // Restore the previewed subs to their real state colors.
+  function clearPreview() {
+    if (!colorAttr || !previewSubs) return;
+    const colors = colorAttr.array;
+    for (const gi of previewSubs) {
+      if (gi < 0) continue;
+      const col = linColor(triState[gi]);
+      const o = gi * 9;
+      for (let k = 0; k < 9; k += 3) { colors[o + k] = col.r; colors[o + k + 1] = col.g; colors[o + k + 2] = col.b; }
+    }
+    previewSubs = null;
     colorAttr.needsUpdate = true;
   }
 
@@ -168,9 +251,10 @@
     const gsub = hits[0].faceIndex; // one geometry triangle == one sub-triangle
     let mi = 0;
     while (mi + 2 < meshSubOffset.length && meshSubOffset[mi + 1] <= gsub) mi++;
+    const renderedLocal = gsub - meshSubOffset[mi];
     return {
       meshIndex: mi,
-      localSub: gsub - meshSubOffset[mi],
+      localSub: renderMap[mi][renderedLocal],
       state: triState[gsub],
       point: hits[0].point,
       normal: hits[0].face ? hits[0].face.normal : ZUP,
@@ -231,6 +315,10 @@
   function animate() {
     requestAnimationFrame(animate);
     controls.update();
+    for (const o of splitObjs) {
+      o.cur.lerp(o.target, 0.15);
+      o.mesh.position.copy(o.cur);
+    }
     renderer.render(scene, camera);
   }
 
@@ -249,10 +337,140 @@
     return c;
   }
 
+  function clearSplitObjs() {
+    for (const o of splitObjs) { root.remove(o.mesh); o.mesh.geometry.dispose(); o.mesh.material.dispose(); }
+    splitObjs = [];
+  }
+
+  function clearRemainderCaps() {
+    for (const m of remainderCapObjs) { root.remove(m); m.geometry.dispose(); m.material.dispose(); }
+    remainderCapObjs = [];
+  }
+  // A double-sided mesh that fills the hole a split part left, built from the
+  // part's cap (reversed so it faces out of the remainder). Stays at the original
+  // position (no explode offset), so it plugs the hole while the part floats away.
+  function capMeshFor(part, solid) {
+    const cap = solid.cap;
+    if (!cap || !cap.tris || !cap.tris.length) return null;
+    const g = Cleanup.buildSubGraph(doc.meshes[part.meshIndex]);
+    const nv = cap.verts.length + cap.extraPts.length;
+    const pos = new Float32Array(nv * 3);
+    for (let i = 0; i < cap.verts.length; i++) {
+      const gid = cap.verts[i];
+      pos[i * 3] = g.vx[gid]; pos[i * 3 + 1] = g.vy[gid]; pos[i * 3 + 2] = g.vz[gid];
+    }
+    for (let i = 0; i < cap.extraPts.length; i++) {
+      const e = cap.extraPts[i], o = (cap.verts.length + i) * 3;
+      pos[o] = e[0]; pos[o + 1] = e[1]; pos[o + 2] = e[2];
+    }
+    const idx = new Uint32Array(cap.tris.length * 3);
+    for (let t = 0; t < cap.tris.length; t++) {
+      // reversed winding (remainder side); double-sided anyway for safe visibility
+      idx[t * 3] = cap.tris[t][0]; idx[t * 3 + 1] = cap.tris[t][2]; idx[t * 3 + 2] = cap.tris[t][1];
+    }
+    const gg = new THREE.BufferGeometry();
+    gg.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    gg.setIndex(new THREE.BufferAttribute(idx, 1));
+    gg.computeVertexNormals();
+    // fill the hole with the surrounding (majority bordering) color, matching the export
+    const fillCol = linColor(Split.majorityBorderColor(doc.meshes[part.meshIndex], g, part));
+    const mat = new THREE.MeshStandardMaterial({ color: fillCol.clone(), roughness: 0.85, metalness: 0.0, side: THREE.DoubleSide });
+    return new THREE.Mesh(gg, mat);
+  }
+
+  function setVisibleMeshes(set) { visibleMeshes = set; }
+  // Show/hide the main merged mesh + its hole-fill caps without rebuilding.
+  function setMainVisible(v) {
+    if (meshObj) meshObj.visible = v;
+    if (!v) for (const m of remainderCapObjs) m.visible = false;
+  }
+  // Pin a split part at the model origin (un-explode it, stop its animation) so
+  // it sits at its true model-space location — used when isolating a part.
+  function pinPart(id) {
+    const o = splitObjs.find((x) => x.id === id);
+    if (o) { o.cur.set(0, 0, 0); o.target.set(0, 0, 0); o.mesh.position.set(0, 0, 0); }
+  }
+  // Show only the split parts whose id is in idSet (null = show all parts).
+  function setPartVisibility(idSet) {
+    for (const o of splitObjs) o.mesh.visible = !idSet || idSet.has(o.id);
+    for (const m of remainderCapObjs) m.visible = !idSet; // caps only make sense with the main mesh
+  }
+  // The THREE.Mesh of the split part with the given id (for framing on it).
+  function partObject(id) { const o = splitObjs.find((x) => x.id === id); return o ? o.mesh : null; }
+
+  let cutPlaneObj = null;
+  // Show a translucent cut-plane preview ({px,py,pz,nx,ny,nz}) or hide (null).
+  function setCutPlane(plane) {
+    if (!plane) { if (cutPlaneObj) cutPlaneObj.visible = false; return; }
+    if (!cutPlaneObj) {
+      const pg = new THREE.PlaneGeometry(1, 1);
+      const pm = new THREE.MeshBasicMaterial({ color: 0xff5d4e, transparent: true, opacity: 0.22, side: THREE.DoubleSide, depthWrite: false });
+      cutPlaneObj = new THREE.Mesh(pg, pm);
+      cutPlaneObj.add(new THREE.LineSegments(new THREE.EdgesGeometry(pg), new THREE.LineBasicMaterial({ color: 0xec4636 })));
+      cutPlaneObj.renderOrder = 998;
+      scene.add(cutPlaneObj);
+    }
+    const r = geom && geom.boundingSphere ? geom.boundingSphere.radius || 50 : 50;
+    cutPlaneObj.scale.setScalar(r * 3);
+    cutPlaneObj.position.set(plane.px, plane.py, plane.pz);
+    tmpV.set(plane.nx, plane.ny, plane.nz).normalize();
+    tmpQ.setFromUnitVectors(ZUP, tmpV); // PlaneGeometry faces +Z
+    cutPlaneObj.quaternion.copy(tmpQ);
+    cutPlaneObj.visible = true;
+  }
+
+  // parts: [{ meshIndex, subs, state }]
+  function setSplitParts(parts) {
+    const prevById = new Map();
+    for (const o of splitObjs) if (o.id != null) prevById.set(o.id, o.cur);
+    clearSplitObjs();
+    clearRemainderCaps();
+    if (!geom || !parts || !parts.length) return;
+    const c = geom.boundingSphere ? geom.boundingSphere.center : new THREE.Vector3();
+    const r = geom.boundingSphere ? geom.boundingSphere.radius || 50 : 50;
+    const built = [];
+    for (const p of parts) {
+      const s = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "liepa");
+      const gg = new THREE.BufferGeometry();
+      gg.setAttribute("position", new THREE.BufferAttribute(s.positions, 3));
+      gg.setIndex(new THREE.BufferAttribute(s.indices, 1));
+      gg.computeVertexNormals();
+      gg.computeBoundingSphere();
+      gg.computeBoundingBox();
+      const mat = new THREE.MeshStandardMaterial({
+        color: linColor(p.state).clone(), roughness: 0.75, metalness: 0.0,
+      });
+      built.push({ p, s, mesh: new THREE.Mesh(gg, mat) });
+    }
+    // row layout beside the body: parts slot along +X on the base plane
+    if (!geom.boundingBox) geom.computeBoundingBox();
+    const bb = geom.boundingBox;
+    const bodyBox = { min: [bb.min.x, bb.min.y, bb.min.z], max: [bb.max.x, bb.max.y, bb.max.z] };
+    const margin = 0.06 * (geom.boundingSphere ? 2 * (geom.boundingSphere.radius || 50) : 50);
+    const partBoxes = built.map(({ mesh }) => {
+      const b = mesh.geometry.boundingBox;
+      return { min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] };
+    });
+    const offs = Split.layoutParts(bodyBox, partBoxes, margin);
+    built.forEach(({ p, s, mesh }, i) => {
+      const target = new THREE.Vector3(offs[i][0], offs[i][1], offs[i][2]);
+      root.add(mesh);
+      const cur = prevById.get(p.id) || new THREE.Vector3();
+      mesh.position.copy(cur);
+      splitObjs.push({ id: p.id, mesh, target, cur });
+      const capMesh = capMeshFor(p, s);
+      if (capMesh) { root.add(capMesh); remainderCapObjs.push(capMesh); }
+    });
+  }
+
   // (Re)build the sub-triangle geometry from each mesh's current paints.
-  function build(d) {
+  function build(d, claimed) {
     doc = d;
     stateColorCache = {};
+    if (!claimed) claimedSets = d.meshes.map(() => new Set());
+    else claimedSets = claimed;
+    renderMap = d.meshes.map(() => []);
+    origToRender = d.meshes.map(() => new Map());
 
     // count total faces and sub-triangles; cache per-face solid/tree
     let totalFaces = 0;
@@ -262,7 +480,6 @@
     totalSub = 0;
     for (const m of doc.meshes) {
       meshFaceOffset.push(totalFaces);
-      meshSubOffset.push(totalSub);
       totalFaces += m.nf;
       const solid = new Int32Array(m.nf);
       const trees = new Array(m.nf);
@@ -281,7 +498,6 @@
       }
       meshTrees.push({ solid, trees });
     }
-    meshSubOffset.push(totalSub); // sentinel
 
     const positions = new Float32Array(totalSub * 9);
     triState = new Int32Array(totalSub);
@@ -294,44 +510,53 @@
       const m = doc.meshes[mi];
       const P = m.positions;
       const { solid, trees } = meshTrees[mi];
+      meshSubOffset[mi] = t;
+      if (visibleMeshes && !visibleMeshes.has(mi)) {
+        for (let i = 0; i < m.nf; i++) { faceStart[gf] = t; gf += 1; } // keep faceStart globally indexed
+        continue;
+      }
+      let origLocal = 0; // original leaf index within this mesh (claimed + unclaimed)
+      const claimedSet = claimedSets[mi] || new Set();
       for (let i = 0; i < m.nf; i++) {
         faceStart[gf] = t;
-        const a = m.v1[i] * 3,
-          b = m.v2[i] * 3,
-          c = m.v3[i] * 3;
+        const a = m.v1[i] * 3, b = m.v2[i] * 3, c = m.v3[i] * 3;
         const ax = P[a], ay = P[a + 1], az = P[a + 2];
         const bx = P[b], by = P[b + 1], bz = P[b + 2];
         const cx = P[c], cy = P[c + 1], cz = P[c + 2];
-        if (solid[i] >= 0) {
-          positions[off] = ax; positions[off + 1] = ay; positions[off + 2] = az;
-          positions[off + 3] = bx; positions[off + 4] = by; positions[off + 5] = bz;
-          positions[off + 6] = cx; positions[off + 7] = cy; positions[off + 8] = cz;
-          triState[t] = solid[i];
+        const emitLeaf = (state, x0,y0,z0,x1,y1,z1,x2,y2,z2) => {
+          const mine = origLocal; origLocal++;
+          if (claimedSet.has(mine)) return;        // hidden: this part lifted out
+          positions[off] = x0; positions[off+1] = y0; positions[off+2] = z0;
+          positions[off+3] = x1; positions[off+4] = y1; positions[off+5] = z1;
+          positions[off+6] = x2; positions[off+7] = y2; positions[off+8] = z2;
+          triState[t] = state;
+          origToRender[mi].set(mine, renderMap[mi].length);
+          renderMap[mi].push(mine);
           off += 9; t += 1;
+        };
+        if (solid[i] >= 0) {
+          emitLeaf(solid[i], ax,ay,az, bx,by,bz, cx,cy,cz);
         } else {
-          Paint.tessellate(
-            trees[i], ax, ay, az, bx, by, bz, cx, cy, cz,
-            (leaf, x0, y0, z0, x1, y1, z1, x2, y2, z2) => {
-              positions[off] = x0; positions[off + 1] = y0; positions[off + 2] = z0;
-              positions[off + 3] = x1; positions[off + 4] = y1; positions[off + 5] = z1;
-              positions[off + 6] = x2; positions[off + 7] = y2; positions[off + 8] = z2;
-              triState[t] = leaf.state;
-              off += 9; t += 1;
-            }
-          );
+          Paint.tessellate(trees[i], ax,ay,az, bx,by,bz, cx,cy,cz,
+            (leaf, x0,y0,z0,x1,y1,z1,x2,y2,z2) =>
+              emitLeaf(leaf.state, x0,y0,z0,x1,y1,z1,x2,y2,z2));
         }
         gf += 1;
       }
     }
+    meshSubOffset.push(t); // sentinel (rendered count)
     faceStart[totalFaces] = t;
 
     if (geom) {
       root.remove(meshObj);
       geom.dispose();
     }
+    const usedTris = t;
+    const pos = positions.subarray(0, usedTris * 9);
     geom = new THREE.BufferGeometry();
-    geom.setAttribute("position", new THREE.BufferAttribute(positions, 3));
-    colorAttr = new THREE.BufferAttribute(new Float32Array(totalSub * 9), 3);
+    geom.setAttribute("position", new THREE.BufferAttribute(pos, 3));
+    colorAttr = new THREE.BufferAttribute(new Float32Array(usedTris * 9), 3);
+    previewSubs = null;
     geom.setAttribute("color", colorAttr);
     geom.computeVertexNormals();
     geom.computeBoundingSphere();
@@ -365,17 +590,18 @@
     colorAttr.needsUpdate = true;
   }
 
-  function frame() {
-    if (!geom) return;
-    const bs = geom.boundingSphere;
-    const c = bs.center,
-      r = bs.radius || 50;
+  function frame(obj) {
+    let c, r;
+    if (obj && obj.geometry && obj.geometry.boundingSphere) {
+      c = obj.geometry.boundingSphere.center.clone().add(obj.position); // world center
+      r = obj.geometry.boundingSphere.radius || 50;
+    } else if (geom && geom.boundingSphere) {
+      c = geom.boundingSphere.center; r = geom.boundingSphere.radius || 50;
+    } else return;
     controls.target.copy(c);
-    // Z-up: view from front (-Y), slightly to the side and above.
     const dir = new THREE.Vector3(0.5, -1.0, 0.45).normalize();
     camera.position.copy(c).add(dir.multiplyScalar(r * 2.6));
-    camera.near = r / 100;
-    camera.far = r * 100;
+    camera.near = r / 100; camera.far = r * 100;
     camera.updateProjectionMatrix();
     controls.update();
   }
@@ -396,5 +622,14 @@
     paintSubs,
     toGlobalSub,
     subTriangleCount: () => totalSub,
+    setSplitParts,
+    setCutPlane,
+    setPreview,
+    clearPreview,
+    setVisibleMeshes,
+    setMainVisible,
+    pinPart,
+    setPartVisibility,
+    partObject,
   };
 })(window);

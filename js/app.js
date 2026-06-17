@@ -1,5 +1,5 @@
-/* app.js — UI glue: tools (orbit/rotate/brush/ring/fill), auto-clean,
- * undo/redo history, export. */
+/* app.js — UI glue: edit tools (brush/ring/fill/split/cut), orbit + model-orient,
+ * auto-clean, undo/redo history, export. */
 (function () {
   "use strict";
 
@@ -9,6 +9,7 @@
   let doc = null;
   let fileName = "model.3mf";
   let modelSize = 100;
+  let modelBBox = { lo: [0, 0, 0], hi: [100, 100, 100] };
 
   // history
   let history = [];
@@ -21,6 +22,21 @@
   let paintState = null; // selected palette color
   let stroke = null; // active brush stroke
   let lastHit = null; // last hovered surface hit (for live cursor)
+  let previewCache = null; // { tool, meshIndex, members:Set<localSub>, globalSubs, subs }
+  function clearHoverPreview() { if (previewCache) { Viewer.clearPreview(); previewCache = null; } }
+  let splitParts = []; // [{ meshIndex, subs:Int32Array, state, method }]
+  let splitSeq = 0; // stable id per split part (for animation carry-over)
+  let isolated = null; // { kind:"mesh", index } | { kind:"part", id } | null
+  const claimedByMesh = () => {
+    const sets = doc.meshes.map(() => new Set());
+    for (const p of splitParts) for (const s of p.subs) sets[p.meshIndex].add(s);
+    return sets;
+  };
+  function rebuildView(highlightSet) {
+    Viewer.build(doc, claimedByMesh());
+    Viewer.setSplitParts(splitParts);
+    if (highlightSet) Viewer.setHighlight(highlightSet);
+  }
 
   // island-size control (log slider + number)
   const SIZE_MAX = 50000;
@@ -30,14 +46,24 @@
 
   // ---------- snapshots / history ----------
   function snap() {
-    return doc.meshes.map((m) => ({ paints: m.paints.slice(), dom: Int32Array.from(m.dom) }));
+    return {
+      meshes: doc.meshes.map((m) => ({ paints: m.paints.slice(), dom: Int32Array.from(m.dom) })),
+      splits: splitParts.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method })),
+      filaments: doc.filaments.map((f) => ({ index: f.index, hex: f.hex })),
+      meshList: doc.meshes.slice(),
+      synthetic: !!doc.synthetic,
+    };
   }
   function restore(state) {
+    if (state.meshList) doc.meshes = state.meshList.slice();
+    doc.synthetic = !!state.synthetic;
     doc.meshes.forEach((m, i) => {
-      m.paints = state[i].paints.slice();
-      m.dom = Int32Array.from(state[i].dom);
+      m.paints = state.meshes[i].paints.slice();
+      m.dom = Int32Array.from(state.meshes[i].dom);
       Cleanup.invalidateSub(m);
     });
+    if (state.filaments) doc.filaments = state.filaments.map((f) => ({ index: f.index, hex: f.hex }));
+    splitParts = state.splits.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method }));
   }
   const current = () => history[histIndex].state;
   function pushHistory(label, stateClone) {
@@ -54,8 +80,7 @@
   }
 
   function render(highlightSet) {
-    Viewer.build(doc);
-    if (highlightSet) Viewer.setHighlight(highlightSet);
+    rebuildView(highlightSet);
   }
 
   // ---------- helpers ----------
@@ -107,9 +132,10 @@
       }
     }
     modelSize = Math.hypot(d - a, e - b, f - c) || 100;
+    modelBBox = { lo: [a, b, c], hi: [d, e, f] };
   }
-  const brushRadius = () => (+$("brushSize").value / 100) * modelSize * 0.15 + modelSize * 0.004;
-  const ringHalf = () => (+$("ringThick").value / 100) * modelSize * 0.05 + modelSize * 0.002;
+  const brushRadius = () => { const t = (+$("brushSize").value) / 100; return modelSize * (0.0015 + 0.06 * t * t); };
+  const ringHalf = () => { const t = (+$("ringThick").value) / 100; return modelSize * (0.001 + 0.04 * t * t); };
 
   // ---------- loading ----------
   async function loadFile(file) {
@@ -118,6 +144,10 @@
       fileName = file.name;
       doc = await ThreeMF.load(await file.arrayBuffer());
       if (!doc.meshes.length) { toast("No mesh found in this .3mf", true); return; }
+      splitParts = [];
+      isolated = null;
+      Viewer.setVisibleMeshes(null);
+      Viewer.setPartVisibility(null);
       for (const m of doc.meshes) Cleanup.computeDominant(m);
       computeModelSize();
       render(null);
@@ -125,8 +155,8 @@
       history = [{ state: snap(), label: "Loaded" }];
       histIndex = 0;
       previewActive = false;
-      buildFilamentUI();
       buildPalette();
+      buildObjects();
       setTool("orbit");
       updateStats();
       updateHist();
@@ -134,10 +164,11 @@
       $("fileInfo").innerHTML =
         "<b>" + file.name + "</b><br>" + nf.toLocaleString() + " faces · " +
         Viewer.subTriangleCount().toLocaleString() + " sub-triangles · " + doc.filaments.length + " filaments";
-      ["filamentCard", "cleanCard", "statsCard", "historyCard"].forEach((id) => ($(id).hidden = false));
+      ["objectsCard", "filamentCard", "cleanCard", "statsCard", "historyCard"].forEach((id) => ($(id).hidden = false));
       $("exportBtn").disabled = false;
       $("reframeBtn").hidden = false;
       $("bgToggle").hidden = false;
+      $("orientBtn").hidden = false;
       $("overlay").classList.add("hide");
       toast("Loaded · pick a tool up top to edit");
     } catch (e) {
@@ -146,21 +177,28 @@
     }
   }
 
-  function buildFilamentUI() {
+  // The clean-list shows every paintable colour (union of states present in the
+  // meshes and all palette filaments; count 0 when unpainted) and preserves the
+  // user's protect-toggles across rebuilds.
+  function refreshFilamentUI() {
     const fc = gatherStates();
     const list = $("filamentList");
+    const prev = {};
+    list.querySelectorAll("input[data-state]").forEach((cb) => (prev[cb.dataset.state] = cb.checked));
     list.innerHTML = "";
-    Object.keys(fc).map(Number).sort((a, b) => a - b).forEach((s) => {
+    const states = new Set(Object.keys(fc).map(Number));
+    for (let i = 1; i <= doc.filaments.length; i++) states.add(i);
+    [...states].sort((a, b) => a - b).forEach((s) => {
       const li = document.createElement("li");
       const cb = document.createElement("input");
-      cb.type = "checkbox"; cb.checked = true; cb.dataset.state = s;
+      cb.type = "checkbox"; cb.checked = prev[s] !== undefined ? prev[s] : true; cb.dataset.state = s;
       cb.addEventListener("change", clearPreview);
       const sw = document.createElement("span");
       sw.className = "swatch"; sw.style.background = stateColor(s);
       const nm = document.createElement("span");
       nm.className = "fname"; nm.textContent = colorName(s);
       const ct = document.createElement("span");
-      ct.className = "fcount"; ct.textContent = fc[s].toLocaleString();
+      ct.className = "fcount"; ct.textContent = (fc[s] || 0).toLocaleString();
       li.append(cb, sw, nm, ct);
       list.appendChild(li);
     });
@@ -168,23 +206,111 @@
 
   // ---------- palette / tools ----------
   function buildPalette() {
-    const fc = gatherStates();
     const pal = $("palette");
     pal.innerHTML = "";
-    const states = Object.keys(fc).map(Number).sort((a, b) => a - b);
-    states.forEach((s) => {
+    const orig = doc.origFilamentCount ?? doc.filaments.length;
+    doc.filaments.forEach((f, i) => {
+      const s = i + 1; // filament index = paint state
       const d = document.createElement("div");
-      d.className = "pal"; d.dataset.state = s; d.style.background = stateColor(s); d.title = colorName(s);
+      d.className = "pal"; d.dataset.state = s; d.style.background = f.hex; d.title = "Filament " + s;
       d.addEventListener("click", () => selectPaint(s));
+      if (s > orig) {
+        const x = document.createElement("span");
+        x.className = "del"; x.textContent = "×"; x.title = "Delete this color";
+        x.addEventListener("click", (e) => { e.stopPropagation(); deleteColor(s); });
+        d.appendChild(x);
+      }
       pal.appendChild(d);
     });
-    if (states.length) selectPaint(states[states.length - 1]);
+    const add = document.createElement("div");
+    add.className = "pal add"; add.title = "Add a new color"; add.textContent = "+";
+    add.addEventListener("click", () => {
+      const inp = $("addColorInput");
+      const r = add.getBoundingClientRect();
+      inp.style.left = r.left + "px";          // anchor the native picker under the +
+      inp.style.top = r.bottom + 4 + "px";
+      if (inp.showPicker) inp.showPicker(); else inp.click();
+    });
+    pal.appendChild(add);
+    if (doc.filaments.length) selectPaint(Math.min(paintState || doc.filaments.length, doc.filaments.length));
   }
+  // Delete an ADDED filament: areas painted with it return to the model default,
+  // higher paint states shift down, and the whole operation is one undo step.
+  function deleteColor(k) {
+    if (!doc || k <= (doc.origFilamentCount ?? 0)) return;
+    if (previewActive) { restore(current()); previewActive = false; }
+    clearHoverPreview();
+    busy("Removing color…", () => {
+      const mapFn = (s) => (s === k ? 0 : s > k ? s - 1 : s);
+      for (const m of doc.meshes) Cleanup.remapStates(m, mapFn);
+      // split parts carry their own state — remap those too, or a part painted
+      // with the deleted/shifted colour keeps a stale extruder index
+      splitParts = splitParts.map((p) => ({ ...p, state: mapFn(p.state) }));
+      doc.filaments.splice(k - 1, 1);
+      doc.filaments.forEach((f, i) => (f.index = i + 1));
+      pushHistory("Delete color");
+      buildPalette(); // re-selects a valid paint colour
+      render(null);
+      updateStats();
+      toast("Color removed · repainted to default where used");
+    });
+  }
+
+  function buildObjects() {
+    const ul = $("objectsList");
+    ul.innerHTML = "";
+    doc.meshes.forEach((m, i) => {
+      const li = document.createElement("li");
+      li.className = "objrow";
+      const nm = document.createElement("span"); nm.className = "fname"; nm.textContent = "Object " + (i + 1);
+      const ct = document.createElement("span"); ct.className = "fcount"; ct.textContent = m.nf.toLocaleString();
+      nm.addEventListener("click", () => isolate({ kind: "mesh", index: i }));
+      ct.addEventListener("click", () => isolate({ kind: "mesh", index: i }));
+      li.append(nm, ct);
+      ul.appendChild(li);
+    });
+    splitParts.forEach((p) => {
+      const li = document.createElement("li");
+      li.className = "objrow";
+      const sw = document.createElement("span"); sw.className = "swatch"; sw.style.background = stateColor(p.state);
+      const nm = document.createElement("span"); nm.className = "fname"; nm.textContent = colorName(p.state) + " part";
+      nm.addEventListener("click", () => isolate({ kind: "part", id: p.id }));
+      li.append(sw, nm);
+      ul.appendChild(li);
+    });
+    $("showAllBtn").hidden = !isolated;
+  }
+  function isolate(target) {
+    isolated = target;
+    if (target.kind === "mesh") {
+      Viewer.setVisibleMeshes(new Set([target.index]));
+      render(null);                       // rebuild with only this mesh
+      Viewer.setMainVisible(true);
+      Viewer.setPartVisibility(new Set()); // hide all split parts
+      Viewer.frame();                      // recenter on the built geometry
+    } else { // kind === "part" — view-only: hide the main mesh, show+pin the part
+      Viewer.setMainVisible(false);
+      Viewer.setPartVisibility(new Set([target.id]));
+      Viewer.pinPart(target.id);           // park it at origin (no explode)
+      Viewer.frame(Viewer.partObject(target.id));
+    }
+    buildObjects();
+  }
+  function showAll() {
+    isolated = null;
+    Viewer.setVisibleMeshes(null);
+    render(null);
+    Viewer.setMainVisible(true);
+    Viewer.setPartVisibility(null);
+    Viewer.frame();
+    buildObjects();
+  }
+
   function selectPaint(s) {
     paintState = s;
     document.querySelectorAll(".pal").forEach((p) => p.classList.toggle("sel", +p.dataset.state === s));
   }
-  const sizeDotPx = (v) => Math.round(6 + (v / 100) * 34);
+  const sizeDotPx = (v) => { const t = v / 100; return Math.round(5 + t * t * 33); };
   function updateSizeDots() {
     const b = sizeDotPx(+$("brushSize").value);
     $("brushPrev").style.width = $("brushPrev").style.height = b + "px";
@@ -197,9 +323,11 @@
     document.querySelectorAll("#optionsbar .opt").forEach((p) => (p.hidden = p.dataset.panel !== name));
     const paintTool = name === "brush" || name === "ring" || name === "fill";
     $("palette").classList.toggle("hide", !paintTool);
-    Viewer.setTool(name === "brush" ? "paint" : name === "ring" || name === "fill" ? "pick" : "orbit");
-    Viewer.enableHover(name === "brush" || name === "ring");
-    if (doc && paintTool && doc.meshes.some((m) => !m._sub)) {
+    Viewer.setTool(name === "brush" ? "paint" : (name === "ring" || name === "fill" || name === "split") ? "pick" : "orbit");
+    Viewer.enableHover(name === "brush" || name === "ring" || name === "split" || name === "fill");
+    if (name !== "split" && name !== "ring" && name !== "fill") clearHoverPreview();
+    if (name === "cut") updateCutPlane(); else Viewer.setCutPlane(null);
+    if (doc && (paintTool || name === "split") && doc.meshes.some((m) => !m._sub)) {
       busy("Preparing tool…", () => { for (const m of doc.meshes) Cleanup.buildSubGraph(m); });
     }
     updateSizeDots();
@@ -235,26 +363,51 @@
   function startStroke(hit) {
     if (paintState == null) return;
     if (previewActive) { restore(current()); previewActive = false; }
-    stroke = { mi: hit.meshIndex, pend: new Set() };
+    stroke = { mi: hit.meshIndex, pend: new Set(), stamps: [] };
     brushAt(hit);
+  }
+  const enabledAxes = () => [...document.querySelectorAll("#symAxes button.on")].map((b) => +b.dataset.axis);
+  const fillSmart = () => document.querySelector("#fillModes button.on").dataset.mode === "smart";
+  function updateFillPanel() {
+    const smart = fillSmart();
+    $("fillAutoWrap").hidden = smart;
+    $("fillAngleLabel").hidden = !smart;
+    $("fillAngle").hidden = !smart;
   }
   function brushAt(hit) {
     if (!stroke || hit.meshIndex !== stroke.mi) return;
     const m = doc.meshes[hit.meshIndex];
-    const subs = Cleanup.selectRadius(m, hit.localSub, hit.point.x, hit.point.y, hit.point.z, brushRadius());
+    const r = brushRadius();
+    stroke.stamps.push({ x: hit.point.x, y: hit.point.y, z: hit.point.z, r });
+    // live preview: whole-leaf tint (the precise stamp refinement runs on release)
+    const subs = Cleanup.selectRadius(m, hit.localSub, hit.point.x, hit.point.y, hit.point.z, r);
+    let all = subs;
+    const axes = enabledAxes();
+    if (axes.length) {
+      const set = new Set(subs);
+      for (const a of axes) {
+        const mir = Cleanup.mirrorMap(m, a);
+        for (const s of [...set]) { const p = mir[s]; if (p >= 0) set.add(p); }
+      }
+      all = [...set];
+    }
     const g = [];
-    for (const s of subs) { stroke.pend.add(s); g.push(Viewer.toGlobalSub(hit.meshIndex, s)); }
+    for (const s of all) { stroke.pend.add(s); g.push(Viewer.toGlobalSub(hit.meshIndex, s)); }
     Viewer.paintSubs(g, paintState);
   }
   function endStroke() {
     if (!stroke) return;
-    const m = doc.meshes[stroke.mi], subs = [...stroke.pend];
+    const m = doc.meshes[stroke.mi], stamps = stroke.stamps;
     stroke = null;
-    if (!subs.length) return;
-    Cleanup.applyStates(m, subs, paintState);
-    pushHistory("Brush");
-    render(null);
-    updateStats();
+    if (!stamps.length) return;
+    const expanded = Cleanup.mirrorStamps(m, stamps, enabledAxes());
+    busy("Refining stroke…", () => {
+      const res = Cleanup.paintStamps(m, expanded, paintState, { maxDepth: 4 });
+      if (!res.count) { render(null); return; } // painted same-over-same: just restore the live tint
+      pushHistory("Brush");
+      render(null);
+      updateStats();
+    });
   }
   Viewer.onPaint({
     down: (hit) => { if (activeTool === "brush") startStroke(hit); },
@@ -267,9 +420,15 @@
     if (paintState == null) return;
     if (previewActive) { restore(current()); previewActive = false; }
     const m = doc.meshes[hit.meshIndex];
-    const fa = Cleanup.featureAxis(m, hit.localSub, ringNeighborhood());
-    const subs = Cleanup.selectBandAxis(m, hit.localSub, ringHalf(), fa.ax, fa.ay, fa.az);
+    let subs;
+    if (previewCache && previewCache.tool === "ring" && previewCache.meshIndex === hit.meshIndex && previewCache.members.has(hit.localSub)) {
+      subs = previewCache.subs;
+    } else {
+      const fa = Cleanup.featureAxis(m, hit.localSub, ringNeighborhood(), hit.normal.x, hit.normal.y, hit.normal.z);
+      subs = Cleanup.selectBandAxis(m, hit.localSub, ringHalf(), fa.ax, fa.ay, fa.az);
+    }
     if (!subs.length) return;
+    clearHoverPreview();
     Cleanup.applyStates(m, subs, paintState);
     pushHistory("Ring");
     render(null);
@@ -277,23 +436,46 @@
     toast("Ring · " + subs.length.toLocaleString() + " sub-triangles");
   }
 
-  // hover cursor preview (black ring) — follows the surface; for the ring tool
-  // it orients to the local feature axis so it wraps ears/tail correctly.
   function onHover(hit) {
     lastHit = hit;
+    if (activeTool === "split" || activeTool === "ring" || activeTool === "fill") {
+      Viewer.hideCursor();
+      if (!hit || hit.localSub == null) { clearHoverPreview(); return; }
+      if (previewCache && previewCache.tool === activeTool && previewCache.meshIndex === hit.meshIndex && previewCache.members.has(hit.localSub)) return;
+      clearHoverPreview();
+      const m = doc.meshes[hit.meshIndex];
+      let subs;
+      if (activeTool === "split") {
+        subs = Cleanup.selectColorRegion(m, hit.localSub, claimedByMesh()[hit.meshIndex]);
+      } else if (activeTool === "fill") {
+        if (fillSmart()) {
+          const faces = Cleanup.selectSmartFaces(m, Cleanup.buildSubGraph(m).subFace[hit.localSub], +$("fillAngle").value);
+          subs = Cleanup.facesToSubs(m, faces);
+        } else {
+          subs = Cleanup.selectColorRegion(m, hit.localSub); // fillRegion's flood (no claimed-exclusion)
+        }
+      } else {
+        const fa = Cleanup.featureAxis(m, hit.localSub, ringNeighborhood(), hit.normal.x, hit.normal.y, hit.normal.z);
+        subs = Cleanup.selectBandAxis(m, hit.localSub, ringHalf(), fa.ax, fa.ay, fa.az);
+      }
+      if (!subs.length) return;
+      const members = new Set(subs);
+      const g = [];
+      for (const s of subs) { const gi = Viewer.toGlobalSub(hit.meshIndex, s); if (gi >= 0) g.push(gi); }
+      Viewer.setPreview(g);
+      previewCache = { tool: activeTool, meshIndex: hit.meshIndex, members, globalSubs: g, subs };
+      return;
+    }
     if (!hit) { Viewer.hideCursor(); return; }
     if (activeTool === "brush") {
       const n = hit.normal;
       Viewer.setCursorTransform(hit.point.x, hit.point.y, hit.point.z, n.x, n.y, n.z, brushRadius());
-    } else if (activeTool === "ring") {
-      const m = doc.meshes[hit.meshIndex];
-      const fa = Cleanup.featureAxis(m, hit.localSub, ringNeighborhood());
-      Viewer.setCursorTransform(fa.cx, fa.cy, fa.cz, fa.ax, fa.ay, fa.az, fa.radius);
     }
   }
   Viewer.onHover(onHover);
   function doFill(hit) {
     if (previewActive) { restore(current()); previewActive = false; }
+    clearHoverPreview();
     const m = doc.meshes[hit.meshIndex];
     const target = $("fillAuto").checked ? null : paintState;
     const res = Cleanup.fillRegion(m, hit.localSub, target);
@@ -303,13 +485,98 @@
     updateStats();
     toast("Filled " + res.count.toLocaleString() + " sub-triangles");
   }
+  function doSmartFill(hit) {
+    if (paintState == null) return;
+    if (previewActive) { restore(current()); previewActive = false; }
+    clearHoverPreview();
+    const m = doc.meshes[hit.meshIndex];
+    const faces = Cleanup.selectSmartFaces(m, Cleanup.buildSubGraph(m).subFace[hit.localSub], +$("fillAngle").value);
+    // no-op when the whole region already carries the active color solid
+    const code = Paint.encode({ leaf: true, state: paintState });
+    let same = true;
+    for (let i = 0; i < faces.length; i++) if ((m.paints[faces[i]] || "") !== code) { same = false; break; }
+    if (same) { toast("Already that color", true); return; }
+    Cleanup.paintFacesSolid(m, faces, paintState);
+    pushHistory("Smart fill");
+    render(null);
+    updateStats();
+    toast("Filled " + faces.length.toLocaleString() + " faces");
+  }
+  function doSplit(hit) {
+    if (previewActive) { restore(current()); previewActive = false; }
+    clearHoverPreview();
+    const m = doc.meshes[hit.meshIndex];
+    if (hit.localSub == null) return;
+    const subs = Cleanup.selectColorRegion(m, hit.localSub, claimedByMesh()[hit.meshIndex]);
+    if (!subs.length) { toast("Nothing to split there", true); return; }
+    splitParts.push({ id: splitSeq++, meshIndex: hit.meshIndex, subs, state: hit.state, method: $("capMethod").value });
+    pushHistory("Split");
+    render(null);
+    buildObjects();
+    toast("Split " + subs.length.toLocaleString() + " sub-triangles into a new solid");
+  }
   Viewer.onPick((hit) => {
     if (activeTool === "ring") doRing(hit);
-    else if (activeTool === "fill") doFill(hit);
+    else if (activeTool === "fill") (fillSmart() ? doSmartFill : doFill)(hit);
+    else if (activeTool === "split") doSplit(hit);
   });
+
+  function cutPlane() {
+    const axis = +document.querySelector("#cutAxes button.on").dataset.axis;
+    const t = (+$("cutPos").value) / 100;
+    const ta = (+$("cutTiltA").value) * Math.PI / 180;
+    const tb = (+$("cutTiltB").value) * Math.PI / 180;
+    const lo = modelBBox.lo, hi = modelBBox.hi;
+    const p = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
+    p[axis] = lo[axis] + t * (hi[axis] - lo[axis]);
+    const n = [0, 0, 0];
+    n[axis] = 1;
+    const rot = (v, ax2, ang) => { const i = (ax2 + 1) % 3, j = (ax2 + 2) % 3; const vi = v[i], vj = v[j]; v[i] = vi * Math.cos(ang) - vj * Math.sin(ang); v[j] = vi * Math.sin(ang) + vj * Math.cos(ang); };
+    rot(n, (axis + 1) % 3, ta);
+    rot(n, (axis + 2) % 3, tb);
+    return { px: p[0], py: p[1], pz: p[2], nx: n[0], ny: n[1], nz: n[2] };
+  }
+  function updateCutPlane() { if (!doc || activeTool !== "cut") return; Viewer.setCutPlane(cutPlane()); }
+  // Apply the cut: clip targets, replace them with the kept halves, one undo step.
+  function doCut(keep) {
+    if (!doc) return;
+    if (splitParts.length) { toast("Export or undo your split parts before cutting", true); return; }
+    if (previewActive) { restore(current()); previewActive = false; }
+    clearHoverPreview();
+    const plane = cutPlane();
+    const targets = isolated && isolated.kind === "mesh" ? new Set([isolated.index]) : null;
+    busy("Cutting…", () => {
+      const out = [];
+      let cutAny = false;
+      doc.meshes.forEach((m, i) => {
+        if (targets && !targets.has(i)) { out.push(m); return; }
+        const r = PlaneCut.cutMesh(m, plane);
+        if (!r.above || !r.below) { out.push(m); return; } // plane missed this mesh
+        cutAny = true;
+        if (keep !== "lower") out.push(r.above);
+        if (keep !== "upper") out.push(r.below);
+      });
+      if (!cutAny) { toast("The plane doesn't intersect the model", true); return; }
+      doc.meshes = out;
+      doc.synthetic = true; // original file XML no longer matches; export via the generated package
+      for (const m of doc.meshes) { Cleanup.invalidateSub(m); m.dom = null; Cleanup.computeDominant(m); }
+      isolated = null;
+      Viewer.setVisibleMeshes(null);
+      computeModelSize();
+      pushHistory(keep === "both" ? "Plane cut" : "Plane cut (keep " + keep + ")");
+      render(null);
+      Viewer.setPartVisibility(null);
+      Viewer.frame();
+      buildObjects();
+      updateStats();
+      updateCutPlane();
+      toast("Cut into " + doc.meshes.length + " object(s)");
+    });
+  }
 
   // ---------- auto-clean ----------
   function updateStats() {
+    refreshFilamentUI();
     const thr = getThreshold();
     const sizesAll = {};
     for (const m of doc.meshes) {
@@ -345,6 +612,7 @@
   let previewResult = null;
   function doPreview() {
     if (!doc) return;
+    clearHoverPreview(); // the rebuild invalidates any cached ring/split hover band
     busy("Analyzing…", () => {
       if (previewActive) restore(current());
       const { count, changedGlobal } = runIslands();
@@ -356,6 +624,7 @@
   }
   function doApply() {
     if (!doc) return;
+    clearHoverPreview(); // the rebuild invalidates any cached ring/split hover band
     busy("Cleaning…", () => {
       let count;
       if (previewActive) { count = previewResult ? previewResult.count : 0; }
@@ -369,52 +638,149 @@
   }
   function doReset() {
     if (!doc) return;
+    if (isolated) { isolated = null; Viewer.setVisibleMeshes(null); }
+    clearHoverPreview();
     restore(history[0].state);
     previewActive = false;
+    buildPalette();
     pushHistory("Reset to original");
     render(null); updateStats();
     $("previewInfo").textContent = "";
     toast("Reverted to original");
+    buildObjects();
   }
   function jumpTo(idx) {
     if (!doc || idx < 0 || idx >= history.length) return;
+    if (isolated) { isolated = null; Viewer.setVisibleMeshes(null); }
+    clearHoverPreview();
     previewActive = false; histIndex = idx;
-    restore(current()); render(null); updateStats(); updateHist();
+    restore(current()); buildPalette(); render(null); updateStats(); updateHist();
     $("previewInfo").textContent = "";
+    buildObjects();
+    computeModelSize(); // undo can swap the mesh list (plane cuts)
+    updateCutPlane();
   }
   const doUndo = () => jumpTo(histIndex - 1);
   const doRedo = () => jumpTo(histIndex + 1);
 
-  async function doExport() {
+  function exportBase() { return fileName.replace(/\.3mf$/i, ""); }
+  function exportDefaultName(fmt) {
+    const base = exportBase();
+    return fmt === "obj" ? base + "_paint.zip" : fmt === "split" ? base + "_split.3mf" : base + "_fixed.3mf";
+  }
+  function triggerDownload(blob, name) {
+    const a = document.createElement("a");
+    a.href = URL.createObjectURL(blob);
+    a.download = name;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000);
+    toast("Saved " + name);
+  }
+
+  async function doExportSplit(outName) {
+    if (!doc) return;
+    if (!splitParts.length) { toast("Split a region first", true); return; }
+    try {
+      toast("Packing split .3mf …");
+      triggerDownload(await ThreeMF.exportSplit(doc, splitParts), outName);
+    } catch (e) { console.error(e); toast("Split export failed: " + e.message, true); }
+  }
+  async function doExportObj(outName, weld) {
+    if (!doc) return;
+    try {
+      toast("Building .obj …");
+      const zipBase = outName.replace(/\.[^.]+$/, "");
+      const { obj, mtl } = ObjExport.build(doc, { weld: weld !== false, mtlName: zipBase + ".mtl" });
+      const zip = new JSZip();
+      zip.file(zipBase + ".obj", obj);
+      zip.file(zipBase + ".mtl", mtl);
+      const blob = await zip.generateAsync({
+        type: "blob", compression: "DEFLATE", compressionOptions: { level: 6 },
+      });
+      triggerDownload(blob, outName);
+    } catch (e) { console.error(e); toast("OBJ export failed: " + e.message, true); }
+  }
+  async function doExport(outName) {
     if (!doc) return;
     try {
       if (previewActive) { restore(current()); previewActive = false; render(null); }
       restore(current());
       toast("Packing .3mf …");
-      const blob = await ThreeMF.exportZip(doc);
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(blob);
-      a.download = fileName.replace(/\.3mf$/i, "") + "_fixed.3mf";
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(a.href), 5000);
-      toast("Saved " + a.download);
+      triggerDownload(await ThreeMF.exportZip(doc), outName);
     } catch (e) { console.error(e); toast("Export failed: " + e.message, true); }
+  }
+
+  // ---------- export dialog ----------
+  function exportDescribe(fmt) {
+    if (fmt === "obj") return "Colored mesh as .obj + .mtl, zipped — for other tools.";
+    if (fmt === "split") return "Each painted region as its own watertight solid (" + splitParts.length + " parts).";
+    return "Repaired model, ready to re-slice.";
+  }
+  function selectExportFmt(fmt) {
+    document.querySelectorAll("#exportFmt button").forEach((b) => b.classList.toggle("on", b.dataset.fmt === fmt));
+    $("exportDesc").textContent = exportDescribe(fmt);
+    $("exportWeldWrap").hidden = fmt !== "obj";
+    $("exportName").value = exportDefaultName(fmt);
+  }
+  function openExportDialog() {
+    if (!doc) return;
+    const splitChip = document.querySelector('#exportFmt button[data-fmt="split"]');
+    const noParts = splitParts.length === 0;
+    splitChip.disabled = noParts;
+    splitChip.title = noParts ? "Split a region first" : "";
+    selectExportFmt("3mf");
+    $("exportModal").hidden = false;
+    $("exportName").focus();
+  }
+  function closeExportDialog() { $("exportModal").hidden = true; }
+  function runExport() {
+    const active = document.querySelector("#exportFmt button.on");
+    const fmt = active ? active.dataset.fmt : "3mf";
+    const name = $("exportName").value.trim() || exportDefaultName(fmt);
+    closeExportDialog();
+    if (fmt === "obj") doExportObj(name, $("exportWeld").checked);
+    else if (fmt === "split") doExportSplit(name);
+    else doExport(name);
   }
 
   // ---------- events ----------
   $("fileInput").addEventListener("change", (e) => { if (e.target.files[0]) loadFile(e.target.files[0]); });
-  document.querySelectorAll("#toolbar .tool").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.tool)));
-  document.querySelectorAll("#optionsbar [data-rot]").forEach((b) =>
+  $("addColorInput").addEventListener("change", (e) => {
+    if (!doc) return;
+    const hex = e.target.value; // "#rrggbb"
+    doc.filaments.push({ index: doc.filaments.length + 1, hex });
+    pushHistory("Add color");
+    paintState = doc.filaments.length;
+    buildPalette();
+    updateStats();
+    toast("Added color " + hex.toUpperCase());
+  });
+  document.querySelectorAll("#toolbar .tool").forEach((b) => b.addEventListener("click", () => setTool(b.dataset.tool === activeTool ? "orbit" : b.dataset.tool)));
+  document.querySelectorAll("#orientPop [data-rot]").forEach((b) =>
     b.addEventListener("click", () => { const [ax, d] = b.dataset.rot.split(":"); doRotate({ x: 0, y: 1, z: 2 }[ax], +d); })
   );
-  $("recenterBtn").addEventListener("click", () => Viewer.frame());
   $("brushSize").addEventListener("input", () => {
     updateSizeDots();
     if (activeTool === "brush" && lastHit) onHover(lastHit);
   });
   $("ringThick").addEventListener("input", () => {
     updateSizeDots();
-    if (activeTool === "ring" && lastHit) onHover(lastHit);
+    if (activeTool === "ring") { clearHoverPreview(); if (lastHit) onHover(lastHit); }
+  });
+  document.querySelectorAll("#symAxes button").forEach((b) =>
+    b.addEventListener("click", () => b.classList.toggle("on"))
+  );
+  document.querySelectorAll("#fillModes button").forEach((b) =>
+    b.addEventListener("click", () => {
+      document.querySelectorAll("#fillModes button").forEach((x) => x.classList.toggle("on", x === b));
+      updateFillPanel();
+      clearHoverPreview(); // mode changes the region a hover/click means
+      if (activeTool === "fill" && lastHit) onHover(lastHit);
+    })
+  );
+  $("fillAngle").addEventListener("input", () => {
+    $("fillAngleVal").textContent = $("fillAngle").value;
+    if (activeTool === "fill") { clearHoverPreview(); if (lastHit) onHover(lastHit); }
   });
   $("sizeRange").addEventListener("input", () => { $("sizeNum").value = tickToVal(+$("sizeRange").value); clearPreview(); });
   $("sizeNum").addEventListener("input", () => { $("sizeRange").value = valToTick(+$("sizeNum").value || 1); clearPreview(); });
@@ -423,15 +789,55 @@
   $("resetBtn").addEventListener("click", doReset);
   $("undoBtn").addEventListener("click", doUndo);
   $("redoBtn").addEventListener("click", doRedo);
-  $("exportBtn").addEventListener("click", doExport);
+  $("exportBtn").addEventListener("click", openExportDialog);
+  document.querySelectorAll("#exportFmt button").forEach((b) =>
+    b.addEventListener("click", () => { if (!b.disabled) selectExportFmt(b.dataset.fmt); })
+  );
+  $("exportCancel").addEventListener("click", closeExportDialog);
+  $("exportGo").addEventListener("click", runExport);
+  $("exportModal").addEventListener("click", (e) => { if (e.target === $("exportModal")) closeExportDialog(); });
+  $("capMethod").addEventListener("change", () => {
+    if (!doc || !splitParts.length) return;
+    const method = $("capMethod").value;
+    for (const p of splitParts) p.method = method;
+    pushHistory("Cap method: " + method);
+    render(null);
+    toast("Re-capped " + splitParts.length + " part(s) with " + method);
+  });
   $("reframeBtn").addEventListener("click", () => Viewer.frame());
   $("bgToggle").addEventListener("click", () => $("stage").classList.toggle("dark"));
+  $("orientBtn").addEventListener("click", (e) => { e.stopPropagation(); $("orientPop").hidden = !$("orientPop").hidden; });
+  document.addEventListener("click", (e) => {
+    const pop = $("orientPop");
+    if (!pop.hidden && !pop.contains(e.target) && e.target !== $("orientBtn")) pop.hidden = true;
+  });
+  $("showAllBtn").addEventListener("click", showAll);
+  document.querySelectorAll("#cutAxes button").forEach((b) =>
+    b.addEventListener("click", () => {
+      document.querySelectorAll("#cutAxes button").forEach((x) => x.classList.toggle("on", x === b));
+      updateCutPlane();
+    })
+  );
+  ["cutPos", "cutTiltA", "cutTiltB"].forEach((id) => $(id).addEventListener("input", updateCutPlane));
+  $("cutBoth").addEventListener("click", () => doCut("both"));
+  $("cutUpper").addEventListener("click", () => doCut("upper"));
+  $("cutLower").addEventListener("click", () => doCut("lower"));
 
   document.addEventListener("keydown", (e) => {
     if (!doc) return;
+    if (!$("exportModal").hidden) { if (e.key === "Escape") closeExportDialog(); return; }
     const mod = e.metaKey || e.ctrlKey;
-    if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); }
-    else if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); doRedo(); }
+    if (mod && e.key.toLowerCase() === "z") { e.preventDefault(); e.shiftKey ? doRedo() : doUndo(); return; }
+    if (mod && e.key.toLowerCase() === "y") { e.preventDefault(); doRedo(); return; }
+    // tool shortcuts: modifier-free, ignored while typing in a field
+    if (mod || e.altKey) return;
+    const tag = (e.target && e.target.tagName) || "";
+    if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
+    if (e.key === "Escape") { $("orientPop").hidden = true; setTool("orbit"); return; }
+    const k = e.key.toLowerCase();
+    if (k === "r") { e.preventDefault(); $("orientPop").hidden = !$("orientPop").hidden; return; }
+    const tool = { o: "orbit", b: "brush", n: "ring", f: "fill", s: "split", c: "cut" }[k];
+    if (tool) { e.preventDefault(); setTool(tool); }
   });
 
   const stage = $("stage");

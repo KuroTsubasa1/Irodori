@@ -1,70 +1,192 @@
-# 彩 Irodori — 3MF Color Fixer
+<div align="center">
 
-*Irodori (彩)* — "the tasteful arrangement of color."
+<img src="docs/assets/logo.svg" alt="Irodori logo" width="104" height="104" />
 
-A browser tool to load painted **.3mf** models (Bambu Studio / PrusaSlicer
-multi-color "paint" format), view them in 3D, and remove **stray-color islands**
-— the small blobs and thin lines of a wrong color that appear at boundaries when
-an AI tool quantizes a textured model down to a few filaments.
+# 彩 Irodori
 
-Everything runs locally in your browser. Nothing is uploaded.
+**A browser-only studio for repairing, editing and splitting multi-color paint on `.3mf` models.**
 
-## Use it
+*Irodori (彩) — “the tasteful arrangement of color.”*
 
-Open **`index.html`** in a browser (double-click, or `open index.html`). No
-install or server needed. The window is a small editor: a centered **toolbar**
-on top with an **options strip** beneath it (the active tool's settings + color
-palette), the **workflow** on the left, and the **3D view** filling the rest.
+<br/>
 
-1. **Load a .3mf** (button or drag-and-drop). The model appears upright (the
-   viewer is Z-up, matching the slicer).
-2. **Auto-clean** (left): set *Patch size*, **Preview** (changes flash cyan),
-   then **Clean**. Toggle off any **color** you want protected. The size slider
-   is logarithmic; type an exact value (up to 50000) for bigger patches.
-3. Tools (top bar), each with options on the right and a shared color palette:
-   - 🖐 **Orbit** — look around (drag / scroll / right-drag pan).
-   - ⟲ **Rotate** — turn the model in 90° steps; baked into the saved file.
-   - 🖌 **Brush** — left-drag to paint with the selected color (right-drag still
-     rotates); adjustable size.
-   - ◍ **Ring** — click a feature to wrap a colored band around it at that
-     height; place two and let the slicer fill between them.
-   - 🪣 **Fill** — click a patch to flood its connected region (to a color, or
-     *Auto* = the surrounding color).
-4. **Export** (top right) downloads `<name>_fixed.3mf`. Open it in Bambu Studio.
+![No build step](https://img.shields.io/badge/build-none-12b981?style=flat-square)
+![Vanilla JS](https://img.shields.io/badge/vanilla-JS-f7df1e?style=flat-square)
+![three.js](https://img.shields.io/badge/3D-three.js-000000?style=flat-square)
+![Runs in your browser](https://img.shields.io/badge/runs-in_your_browser-ff5d4e?style=flat-square)
+![100% local](https://img.shields.io/badge/privacy-nothing_uploaded-12b981?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-76_passing-12b981?style=flat-square)
 
-**Undo / Redo** (buttons or ⌘/Ctrl-Z, ⌘/Ctrl-Shift-Z) step through edits.
-**Reset to original** reverts color edits. The **◐** button toggles the
-backdrop light/dark; **⤢** refits the view.
+</div>
 
-## How the cleanup works
+<div align="center">
 
-The slicer paints individual **sub-triangles**, so a stray color usually lives on
-just *part* of a boundary face — a yellow/black face with a thin red sliver
-through it. Working at the face level can't fix that, so the tool operates on
-sub-triangles:
+![Irodori loaded with a painted model](docs/assets/screenshot-main.png)
 
-1. Every face is tessellated into its leaf sub-triangles (the exact pieces the
-   slicer paints).
-2. A graph connects sub-triangles that share an edge. Where a subdivided face
-   borders a less-subdivided one the edges don't line up (a *T-junction*); these
-   are resolved by splitting the coarse edge at the neighbor's midpoints, so
-   connectivity is correct.
-3. Same-color regions are found as connected components. A real feature (the red
-   ball) is one big region; artifacts are thousands of tiny ones. Any region of
-   *≤ Max island size* sub-triangles is recolored to the color it borders most.
+</div>
 
-On the reference model, red fragments into **12,288 connected regions**; cleanup
-at size 60 reassigns ~31,000 stray sub-triangles and leaves about **100** real
-red regions (the ball and large patches). Only the leaves that change are
-rewritten and their face re-encoded; everything else is preserved exactly.
+---
 
-## Fill tool
+## Why Irodori?
 
-The fill tool reuses the same sub-triangle graph for manual fixes. A ray cast
-from your click finds the sub-triangle under the cursor; the tool floods its
-connected same-color region and recolors it — to a color you pick, or to the
-surrounding majority (*Auto*). Each click is one undo step. Because a recolor
-doesn't change geometry, the graph stays cached, so repeated fills are instant.
+AI mesh generators (Meshy, Tripo, …) hand you a beautifully **textured** model.
+But an AMS/MMU printer doesn't print textures — it prints with a handful of
+filaments. The moment you quantize that texture down to 3–5 colors, the
+boundaries fill with **stray-color speckle**: tiny blobs and thin lines of the
+wrong filament that no slicer will clean up for you.
+
+**Irodori is the missing step between "AI model" and "good color print."**
+Drop in a `.3mf`, see exactly where the noise is, wipe it out in one click, then
+hand-paint the details that matter — all in the browser, with **nothing ever
+uploaded**.
+
+> Load → clean → touch up → split → export. Five minutes, no install, no account,
+> no cloud.
+
+---
+
+## What you can do
+
+### 🧹 Auto-clean stray color
+
+Recolor small wrong-color patches to match their surroundings, with a live
+preview and a **patch-size** threshold so you decide what counts as "noise."
+Switch any filament off to protect its fine details from the sweep.
+
+### 🖌️ Paint like a slicer — only better
+
+| Tool | What it does |
+| --- | --- |
+| **Brush** `B` | Paint by dragging; slicer-grade edge refinement runs on release. |
+| **Ring** `N` | Wraps a colored band around the local feature; the axis follows the surface normal. |
+| **Fill** `F` | Flood a connected same-color region (Color / Smart modes, angle threshold). |
+
+Every tool shows an **on-surface hover preview**, and **X/Y/Z mirror painting**
+can be combined so symmetric models stay symmetric.
+
+![Brush tool with the filament palette](docs/assets/screenshot-brush.png)
+
+### 🎨 Real, sliceable colors
+
+Paint with the model's existing filaments or add new ones — added colors export
+as **genuine sliceable filaments**, and every add/delete is undoable.
+
+### ✂️ Split painted regions into watertight solids
+
+Lift any connected colored region out as its own **watertight** part. Pick a cap
+method (Liepa smooth fill by default), then export every part **plus the
+remainder** as separate objects in a single `.3mf` — the cut surfaces stay
+perfectly coincident.
+
+![Split tool](docs/assets/screenshot-split.png)
+
+### 🔪 Plane cut
+
+Slice the whole mesh with a geometric plane — exact triangle clipping, welded
+section points, flat caps. Great for splitting a model for a smaller print bed.
+
+### 📦 Export anywhere
+
+One-click **`.3mf`** (multi-mesh round-trip, filaments normalized to Generic
+PLA) or colored **`.obj`** with a weld toggle for shared vs. split vertices.
+
+---
+
+## How it works
+
+```mermaid
+flowchart LR
+    A([Drop a .3mf]) --> B[Decode paint_color<br/>per-triangle trees]
+    B --> C{{Render in 3D<br/>three.js}}
+    C --> D[🧹 Auto-clean]
+    C --> E[🖌️ Brush / Ring / Fill]
+    C --> F[✂️ Split by color]
+    C --> G[🔪 Plane cut]
+    D --> H([Export .3mf / .obj])
+    E --> H
+    F --> H
+    G --> H
+```
+
+Everything — decode, geometry, repair, re-encode and export — happens on the
+main thread in your tab. There is no server.
+
+---
+
+## Quick start
+
+No build step. It's plain files served over HTTP:
+
+```bash
+python3 -m http.server 8000
+# then open http://localhost:8000
+```
+
+> **Heads up:** after editing anything under `js/`, restart the server on a
+> **new port** (or hard-reload). `http.server` + the browser's heuristic
+> caching will happily serve stale modules and produce phantom
+> "X is not a function" errors.
+
+Run the tests (Node's built-in runner, **76 tests**):
+
+```bash
+npm test
+```
+
+---
+
+## Architecture
+
+Irodori is **vanilla JS with no framework and no bundler**. Each script is an
+IIFE that attaches a global to `window`; the `<script>` order in `index.html`
+*is* the dependency graph. Keep it that way.
+
+```mermaid
+graph TD
+    paint["paint.js<br/><i>paint_color codec · tessellate</i>"]
+    objexport["objexport.js<br/><i>colored .obj</i>"]
+    threemf["threemf.js<br/><i>.3mf load/export</i>"]
+    subgraph_["subgraph.js<br/><i>sub-triangle adjacency</i>"]
+    select["select.js<br/><i>selections · symmetry</i>"]
+    cleanup["cleanup.js<br/><i>paint mutations</i>"]
+    liepa["liepa.js<br/><i>min-weight hole fill</i>"]
+    caps["caps.js<br/><i>boundary caps</i>"]
+    split["split.js<br/><i>watertight solids</i>"]
+    planecut["planecut.js<br/><i>geometric plane cut</i>"]
+    viewer["viewer.js<br/><i>three.js scene · picking</i>"]
+    app["app.js<br/><i>UI glue · tools · history</i>"]
+
+    paint --> threemf
+    paint --> subgraph_
+    subgraph_ --> select --> cleanup
+    paint --> liepa --> caps --> split
+    paint --> planecut
+    threemf --> viewer
+    cleanup --> app
+    split --> app
+    planecut --> app
+    objexport --> app
+    viewer --> app
+```
+
+| Module | Responsibility |
+| --- | --- |
+| `paint.js` | Bambu `paint_color` codec; `Paint.tessellate` is **the** geometry convention every subdivision must match. |
+| `threemf.js` | `.3mf` zip load/export, multi-mesh round-trip, filament normalization. |
+| `subgraph.js` / `select.js` / `cleanup.js` | The `Cleanup` namespace: cached sub-triangle adjacency, read-only selections + symmetry, and paint-mutating ops. |
+| `liepa.js` | Liepa hole filling (rim decimation → 3-D min-weight DP → fan strips → refinement → fairing). |
+| `caps.js` | Boundary-loop extraction and cap triangulation. |
+| `split.js` | Watertight solids from sub-triangle sets; parts and remainder share one cut cap. |
+| `planecut.js` | Exact triangle clipping with welded section points and flat earcut caps. |
+| `viewer.js` | three.js scene, picking, explode animation, preview tints. |
+| `app.js` | UI glue: tools, palette, history (snapshot/undo), panels. |
+
+A test harness (`tests/harness.js`) loads these browser IIFEs into a Node `vm`
+sandbox with vendored three.js + poly2tri, so the pure geometry is testable
+headlessly. Watertightness is asserted as *every undirected edge used exactly
+twice*; winding is covered by an area-weighted Liepa regression.
+
+---
 
 ## The `paint_color` format (reverse-engineered)
 
@@ -72,7 +194,7 @@ Bambu/Prusa store per-triangle paint as a hex string whose **nibbles are read
 right-to-left**. Each node is one nibble: the low 2 bits are `split_sides`
 (`0` = leaf), the high 2 bits are the payload.
 
-```
+```text
 node:
   split = nibble & 0b11
   field = nibble >> 2
@@ -87,42 +209,33 @@ node:
       children = (split + 1) nodes, read recursively
 ```
 
-`state` is the 1-based filament index (state 0 = the object's default extruder);
-colors come from `filament_colour` in `Metadata/project_settings.config`. The
-codec in `js/paint.js` decodes and re-encodes all 199,672 triangles of the
-sample with zero loss.
+`state` is the 1-based filament index (state 0 = the object's default
+extruder); colors come from `filament_colour` in
+`Metadata/project_settings.config`. The codec in `js/paint.js` decodes and
+re-encodes all **199,672 triangles** of the reference model with zero loss.
 
-## Files
+---
 
-| File | Role |
-|------|------|
-| `index.html`, `css/style.css` | UI |
-| `js/paint.js` | `paint_color` decode/encode codec |
-| `js/threemf.js` | unzip/parse `.3mf`, rewrite & repackage on export |
-| `js/cleanup.js` | sub-triangle graph (T-junction-aware), connected-component island removal |
-| `js/viewer.js` | three.js rendering (per-face filament colors) |
-| `js/app.js` | wiring: load, preview/apply, stats, export |
-| `vendor/` | three.js r128, OrbitControls, JSZip (bundled for offline use) |
+## Project layout
 
-## High-resolution rendering
+```
+index.html        # script order = the dependency graph
+css/style.css
+js/               # the 12 modules above (load order matters)
+tests/            # node --test; harness.js sandboxes the browser IIFEs
+samples/          # the tracked reference model
+vendor/           # three.js + poly2tri (vendored)
+docs/             # specs, plans, and these assets
+```
 
-A face can be painted in pieces — the slicer subdivides boundary triangles and
-paints each sub-triangle. The viewer reproduces this exactly: every face's paint
-tree is tessellated into its leaf sub-triangles using the same geometry as
-`TriangleSelector::perform_split` (corners rotated by `special_side`, edges split
-at midpoints, children consumed in reverse order). On the sample this expands
-199,672 faces into **544,468 painted sub-triangles**, matching what you see in
-Bambu Studio rather than a one-color-per-face approximation. Geometry was
-verified to partition each face to floating-point precision, and the
-sub-triangle color placement was cross-checked by edge-coherence (86% of shared
-sub-edges agree, vs 75% for the wrong child order).
+The reference model lives in `samples/`. See **`CLAUDE.md`** for the full module
+map and contributor conventions. Specs live in `docs/superpowers/specs/`, plans
+in `docs/superpowers/plans/` — read the relevant one before extending a feature.
 
-## Notes & limits
+---
 
-- Island size is measured in **sub-triangles**, which vary in size with
-  subdivision depth. If some stray patches survive, raise the threshold; if real
-  details disappear, lower it or untick that color. Preview before applying.
-- Building the sub-triangle graph takes ~1–2 s on a 200k-face model; it's cached
-  until the next edit.
-- Cleanup is color-based, not geometry-based, so it's safe to re-slice the
-  result. Always sanity-check the export in your slicer.
+<div align="center">
+
+**Runs entirely in your browser — nothing is uploaded.**
+
+</div>

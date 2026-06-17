@@ -45,8 +45,9 @@ body {
 .ic { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; display: block; flex: 0 0 auto; }
 
 .tools { display: flex; gap: 7px; justify-self: center; }
+.tooldiv { width: 1px; height: 24px; background: var(--line); margin: 0 4px; flex: 0 0 auto; align-self: center; }
 .tool {
-  display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 14px;
+  display: inline-flex; align-items: center; gap: 8px; height: 40px; padding: 0 13px;
   font: inherit; font-size: 13px; font-weight: 600; border-radius: 11px; color: var(--text);
   background: var(--card); border: 1px solid var(--line); cursor: pointer; transition: .15s;
 }
@@ -64,24 +65,34 @@ body {
 #optionsbar {
   display: flex; align-items: center; gap: 16px; min-height: 54px; flex: 0 0 auto;
   padding: 8px 18px; background: var(--card); border-bottom: 1px solid var(--line); z-index: 6;
+  justify-content: center;
 }
 .opt { display: flex; align-items: center; gap: 12px; }
 .opt[hidden] { display: none; }
 .optlabel { font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .opt input[type="range"] { width: 190px; }
-.opt .rotgrid { display: flex; gap: 6px; }
-.opt .rotgrid button { width: 46px; padding: 8px 0; flex: 0 0 auto; }
 .slim { flex: 0 0 auto; width: auto; padding: 8px 13px; }
 .sizedot {
   display: inline-block; width: 14px; height: 14px; border-radius: 50%;
   background: var(--accent-soft); border: 2px solid var(--accent); transition: width .08s, height .08s;
 }
 
-.palette { display: flex; gap: 7px; align-items: center; margin-left: auto; }
+.palette { display: flex; gap: 7px; align-items: center; }
 .palette.hide { display: none; }
 .pal { width: 26px; height: 26px; border-radius: 8px; cursor: pointer; transition: .12s; box-shadow: inset 0 0 0 1px rgba(0, 0, 0, 0.12); }
 .pal:hover { transform: translateY(-2px) scale(1.05); }
 .pal.sel { box-shadow: 0 0 0 2px var(--card), 0 0 0 4px var(--accent); }
+.pal.add { display: grid; place-items: center; background: transparent; box-shadow: inset 0 0 0 1.5px #c7cedb; color: var(--muted); font-size: 17px; font-weight: 700; line-height: 1; }
+.pal.add:hover { box-shadow: inset 0 0 0 1.5px var(--accent); color: var(--accent); transform: translateY(-2px); }
+.pal { position: relative; }
+.pal .del { position: absolute; top: -6px; right: -6px; width: 15px; height: 15px; border-radius: 50%; background: #1d2330; color: #fff; font-size: 11px; line-height: 15px; text-align: center; cursor: pointer; opacity: 0; transition: opacity .12s; }
+.pal:hover .del { opacity: 1; }
+.pal .del:hover { background: var(--accent-d); }
+.axes { display: flex; gap: 5px; }
+.axes button { flex: 0 0 auto; width: 34px; padding: 7px 0; font-size: 12.5px; font-weight: 700; border-radius: 9px; }
+.axes button.on { background: linear-gradient(140deg, var(--accent-2), var(--accent-d)); border-color: transparent; color: #fff; box-shadow: 0 6px 12px -6px var(--accent); }
+#fillModes button { width: auto; padding: 7px 12px; } /* word chips, not X/Y/Z letters */
+.check[hidden] { display: none; } /* flex display otherwise defeats the hidden attribute */
 
 /* ---------- main: workflow + stage ---------- */
 #main { flex: 1 1 auto; display: flex; min-height: 0; }
@@ -120,6 +131,9 @@ b { color: var(--text); font-weight: 650; }
 .filebtn:hover span { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 #fileInfo { margin-top: 11px; line-height: 1.55; }
 
+#objectsList { list-style: none; margin: 6px 0 0; padding: 0; }
+#objectsList .objrow { display: flex; align-items: center; gap: 11px; padding: 7px 6px; border-radius: 9px; cursor: pointer; transition: background .15s; }
+#objectsList .objrow:hover { background: var(--card-2); }
 #filamentList { list-style: none; margin: 6px 0 0; padding: 0; }
 #filamentList li { display: flex; align-items: center; gap: 11px; padding: 7px 6px; border-radius: 9px; transition: background .15s; }
 #filamentList li:hover { background: var(--card-2); }
@@ -234,6 +248,16 @@ button:disabled { opacity: .42; cursor: not-allowed; transform: none; }
 #bgToggle { top: 66px; }
 #stage.dark .stagebtn { background: rgba(20, 24, 33, 0.55); border-color: rgba(255, 255, 255, 0.14); color: #fff; }
 #stage.dark .stagebtn:hover { background: rgba(20, 24, 33, 0.82); border-color: var(--accent); color: var(--accent); }
+#orientBtn { top: 116px; }
+.orientpop {
+  position: absolute; right: 70px; top: 108px; z-index: 7; padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.96); border: 1px solid rgba(0, 0, 0, 0.08); border-radius: 12px;
+  box-shadow: 0 12px 30px -10px rgba(16, 24, 40, 0.35); -webkit-backdrop-filter: blur(8px); backdrop-filter: blur(8px);
+}
+.orientpop[hidden] { display: none; }
+.orientpop-label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; margin-bottom: 8px; }
+.orientpop .rotgrid button { padding: 8px 0; }
+#stage.dark .orientpop { background: rgba(20, 24, 33, 0.85); border-color: rgba(255, 255, 255, 0.14); color: #fff; }
 #reframeBtn:active { transform: rotate(-90deg); }
 
 /* ---------- animations ---------- */
@@ -256,3 +280,15 @@ button:disabled { opacity: .42; cursor: not-allowed; transform: none; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation: none !important; transition: none !important; }
 }
+
+/* ---------- export modal ---------- */
+.modal { position: fixed; inset: 0; z-index: 20; display: flex; align-items: center; justify-content: center; background: rgba(15, 18, 24, 0.45); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); }
+.modal[hidden] { display: none; }
+.modal-card { width: min(360px, 92vw); display: flex; flex-direction: column; gap: 12px; padding: 20px; background: var(--panel); border: 1px solid var(--line); border-radius: 16px; box-shadow: 0 24px 60px -20px rgba(16, 24, 40, 0.5); }
+.modal-card h2 { margin: 0; font-size: 16px; }
+.modal-card .btnrow { display: flex; gap: 8px; justify-content: flex-end; margin-top: 4px; }
+#exportFmt button { width: auto; padding: 7px 12px; } /* word chips (3MF/OBJ/Split), not X/Y/Z letters */
+#exportFmt button[disabled] { opacity: .4; cursor: not-allowed; }
+#exportDesc { margin: 0; }
+#exportName { width: 100%; background: #fff; color: var(--text); border: 1px solid var(--line); border-radius: 10px; padding: 8px 10px; font: inherit; font-size: 13px; }
+#exportName:focus { outline: none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
