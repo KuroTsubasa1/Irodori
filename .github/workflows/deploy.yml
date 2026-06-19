@@ -1,0 +1,94 @@
+name: Deploy
+
+# Auto-deploy on every push to master. workflow_dispatch lets you re-run a
+# deploy from the Actions tab without an empty commit (e.g. to re-issue SSL).
+on:
+  push:
+    branches: [master]
+  workflow_dispatch:
+
+# One deploy at a time; never let two rsyncs race on the server.
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  DOMAIN: irodori.lasseharm.space
+  DEPLOY_DIR: /opt/irodori
+
+jobs:
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+      - name: Run test suite
+        run: npm test
+
+  deploy:
+    name: Deploy
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Stage exactly the runtime assets — no tests, docs/superpowers, git, or
+      # the user's local .3mf/.jpeg working files reach the server.
+      - name: Stage site
+        run: |
+          mkdir -p _site/docs
+          cp index.html _site/
+          cp -r css js vendor _site/
+          cp -r docs/assets _site/docs/assets
+
+      - name: Configure SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ vars.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+
+      - name: Ensure deploy directory exists
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" \
+            "sudo mkdir -p '$DEPLOY_DIR' && sudo chown -R \$(id -un):\$(id -gn) '$DEPLOY_DIR'"
+
+      - name: Rsync site to server
+        run: |
+          rsync -az --delete \
+            -e "ssh -i ~/.ssh/deploy_key" \
+            _site/ "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:$DEPLOY_DIR/"
+
+      - name: Install nginx vhost
+        run: |
+          scp -i ~/.ssh/deploy_key deploy/nginx/irodori.conf \
+            "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/tmp/irodori.conf"
+          ssh -i ~/.ssh/deploy_key "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" bash -s <<'REMOTE'
+            set -euo pipefail
+            sudo mv /tmp/irodori.conf /etc/nginx/sites-available/irodori.conf
+            sudo ln -sf /etc/nginx/sites-available/irodori.conf /etc/nginx/sites-enabled/irodori.conf
+            sudo nginx -t
+            sudo systemctl reload nginx
+          REMOTE
+
+      # Idempotent: on first run certbot obtains the cert and rewrites the vhost
+      # for 443 + HTTP redirect; on later runs it detects the existing cert and
+      # no-ops. The systemd certbot timer handles automatic renewal between runs.
+      - name: Provision / renew SSL
+        env:
+          CERTBOT_EMAIL: ${{ vars.CERTBOT_EMAIL }}
+        run: |
+          ssh -i ~/.ssh/deploy_key "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" bash -s <<REMOTE
+            set -euo pipefail
+            if [ -n "${CERTBOT_EMAIL}" ]; then
+              EMAIL_ARG="-m ${CERTBOT_EMAIL}"
+            else
+              EMAIL_ARG="--register-unsafely-without-email"
+            fi
+            sudo certbot --nginx -d "${DOMAIN}" \
+              --non-interactive --agree-tos --redirect \$EMAIL_ARG
+            sudo nginx -t && sudo systemctl reload nginx
+          REMOTE
