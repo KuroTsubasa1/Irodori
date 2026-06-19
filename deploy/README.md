@@ -13,16 +13,13 @@ Set these under **Settings → Secrets and variables → Actions**.
 
 | Name              | Where            | Value |
 |-------------------|------------------|-------|
-| `SSH_PRIVATE_KEY` | **Secrets** ⚠️    | Private key whose public half is in the server user's `~/.ssh/authorized_keys` |
-| `SSH_HOST`        | Variables        | Server hostname or IP |
-| `SSH_USER`        | Variables        | SSH login user (must have **passwordless sudo**) |
+| `SSH_PRIVATE_KEY` | **Secrets**      | Private key whose public half is in the server user's `~/.ssh/authorized_keys` |
+| `SSH_HOST`        | **Secrets**      | Server hostname or IP |
+| `SSH_USER`        | **Secrets**      | SSH login user (must have **passwordless sudo**) |
 | `CERTBOT_EMAIL`   | Variables (opt.) | Email for Let's Encrypt expiry notices. If unset, certbot registers without an email. |
 
-> ⚠️ **`SSH_PRIVATE_KEY` must be a Secret, not a Variable.** Repository
-> *Variables* are shown in plaintext in logs and the UI — a private key there is
-> effectively leaked. The workflow reads it from `secrets.SSH_PRIVATE_KEY`. Move
-> it to **Secrets** if you currently have it as a Variable; `SSH_HOST` and
-> `SSH_USER` are fine as Variables.
+> The three SSH values are read from `secrets.*`. `CERTBOT_EMAIL` is optional and
+> read from `vars.*` — leave it unset to have certbot register without an email.
 
 ## Server prerequisites
 

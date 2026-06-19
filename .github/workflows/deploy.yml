@@ -49,24 +49,24 @@ jobs:
           mkdir -p ~/.ssh
           echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "${{ vars.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
+          ssh-keyscan -H "${{ secrets.SSH_HOST }}" >> ~/.ssh/known_hosts 2>/dev/null
 
       - name: Ensure deploy directory exists
         run: |
-          ssh -i ~/.ssh/deploy_key "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" \
+          ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
             "sudo mkdir -p '$DEPLOY_DIR' && sudo chown -R \$(id -un):\$(id -gn) '$DEPLOY_DIR'"
 
       - name: Rsync site to server
         run: |
           rsync -az --delete \
             -e "ssh -i ~/.ssh/deploy_key" \
-            _site/ "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:$DEPLOY_DIR/"
+            _site/ "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:$DEPLOY_DIR/"
 
       - name: Install nginx vhost
         run: |
           scp -i ~/.ssh/deploy_key deploy/nginx/irodori.conf \
-            "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}:/tmp/irodori.conf"
-          ssh -i ~/.ssh/deploy_key "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" bash -s <<'REMOTE'
+            "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}:/tmp/irodori.conf"
+          ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" bash -s <<'REMOTE'
             set -euo pipefail
             sudo mv /tmp/irodori.conf /etc/nginx/sites-available/irodori.conf
             sudo ln -sf /etc/nginx/sites-available/irodori.conf /etc/nginx/sites-enabled/irodori.conf
@@ -81,7 +81,7 @@ jobs:
         env:
           CERTBOT_EMAIL: ${{ vars.CERTBOT_EMAIL }}
         run: |
-          ssh -i ~/.ssh/deploy_key "${{ vars.SSH_USER }}@${{ vars.SSH_HOST }}" bash -s <<REMOTE
+          ssh -i ~/.ssh/deploy_key "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" bash -s <<REMOTE
             set -euo pipefail
             if [ -n "${CERTBOT_EMAIL}" ]; then
               EMAIL_ARG="-m ${CERTBOT_EMAIL}"
