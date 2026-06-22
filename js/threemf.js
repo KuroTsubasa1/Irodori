@@ -157,19 +157,29 @@
     if (rootTxt) { const m = rootTxt.match(/<item[^>]*transform="([^"]+)"/); if (m) bt = m[1]; }
     const xml = Split.buildSplitXML(objects, { buildTransform: bt, defaultExtruder: doc.defaultExtruder });
     const zip = new JSZip();
-    const keep = [
-      [/project_settings\.config$/i, "Metadata/project_settings.config"],
-      [/\[Content_Types\]\.xml$/i, "[Content_Types].xml"],
-      [/_rels\/\.rels$/i, "_rels/.rels"],
-      [/3dmodel\.model\.rels$/i, "3D/_rels/3dmodel.model.rels"],
-    ];
-    for (const [rx, path] of keep) {
-      let t = await readText(doc.zip, rx);
-      if (t == null) continue;
-      if (path === "Metadata/project_settings.config") {
-        t = normalizeFilamentConfig(t, doc.origFilamentCount ?? doc.filaments.length, doc.filaments);
-      }
-      zip.file(path, t);
+    // Generate the OPC plumbing fresh — never copy it from the source. The
+    // generated package has a fixed layout (geometry at 3D/Objects/object_1.model,
+    // referenced from 3dmodel.model by a production-extension component), so its
+    // relationships are fixed too. Reusing the source's 3dmodel.model.rels broke
+    // any file that stored geometry inline (empty model.rels -> the Objects
+    // component is unreferenced -> the export opens with no model).
+    const RELS_NS = "http://schemas.openxmlformats.org/package/2006/relationships";
+    const REL_TYPE = "http://schemas.microsoft.com/3dmanufacturing/2013/01/3dmodel";
+    const relsFile = (target) =>
+      '<?xml version="1.0" encoding="UTF-8"?>\n<Relationships xmlns="' + RELS_NS + '">\n' +
+      ' <Relationship Target="' + target + '" Id="rel-1" Type="' + REL_TYPE + '"/>\n</Relationships>\n';
+    zip.file("[Content_Types].xml",
+      '<?xml version="1.0" encoding="UTF-8"?>\n<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">\n' +
+      ' <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>\n' +
+      ' <Default Extension="model" ContentType="application/vnd.ms-package.3dmanufacturing-3dmodel+xml"/>\n</Types>\n');
+    zip.file("_rels/.rels", relsFile("/3D/3dmodel.model"));
+    zip.file("3D/_rels/3dmodel.model.rels", relsFile("/3D/Objects/object_1.model"));
+    // Carry over the user's print/filament settings (the only source part with
+    // real data); normalize filaments as on the splice path.
+    let proj = await readText(doc.zip, /project_settings\.config$/i);
+    if (proj != null) {
+      zip.file("Metadata/project_settings.config",
+        normalizeFilamentConfig(proj, doc.origFilamentCount ?? doc.filaments.length, doc.filaments));
     }
     zip.file("3D/3dmodel.model", xml.rootModel);
     zip.file("3D/Objects/object_1.model", xml.objectsModel);
