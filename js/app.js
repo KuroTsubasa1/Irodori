@@ -457,6 +457,25 @@
 
   function onHover(hit) {
     lastHit = hit;
+    if (activeTool === "stamp") {
+      Viewer.hideCursor();
+      if (!stampImg) return;
+      // while un-placed, follow the hover point; once placed, keep pendingDecal
+      const src = pendingDecal || (hit && hit.localSub != null
+        ? { meshIndex: hit.meshIndex, frame: Decal.frame(hit.point.x, hit.point.y, hit.point.z,
+              hit.normal.x, hit.normal.y, hit.normal.z, 0, 1, 0, (+$("stampRot").value) * Math.PI / 180) }
+        : null);
+      if (!src) { clearHoverPreview(); return; }
+      clearHoverPreview();
+      const m = doc.meshes[src.meshIndex];
+      const { w, h } = stampWH();
+      const subs = decalPreviewSubs(m, src.frame, w, h, stampMaskObj());
+      const g = [];
+      for (const s of subs) { const gi = Viewer.toGlobalSub(src.meshIndex, s); if (gi >= 0) g.push(gi); }
+      Viewer.setPreview(g);
+      previewCache = { tool: "stamp", meshIndex: src.meshIndex, members: new Set(subs), globalSubs: g, subs };
+      return;
+    }
     if (activeTool === "split" || activeTool === "ring" || activeTool === "fill") {
       Viewer.hideCursor();
       if (!hit || hit.localSub == null) { clearHoverPreview(); return; }
@@ -522,6 +541,70 @@
     img.src = URL.createObjectURL(file);
   });
 
+  let pendingDecal = null; // { meshIndex, frame } once the user clicks to place
+  const stampSizeWorld = () => { const t = (+$("stampSize").value) / 100; return modelSize * (0.02 + 0.5 * t); };
+  function stampWH() {
+    const s = stampSizeWorld();
+    const a = stampImg ? stampImg.aspect : 1;
+    return a >= 1 ? { w: s, h: s / a } : { w: s * a, h: s }; // longest edge = s
+  }
+  function stampMaskObj() {
+    return { data: stampImg.mask.data, w: stampImg.mask.w, h: stampImg.mask.h,
+             threshold: +$("stampThresh").value, invert: $("stampInvert").checked };
+  }
+  // Whole-leaf preview: which local subs sample as "paint" under this frame.
+  function decalPreviewSubs(m, frame, w, h, mask) {
+    const g = Cleanup.buildSubGraph(m);
+    const depthBand = Math.max(w, h);
+    const out = [];
+    for (let s = 0; s < g.NS; s++) {
+      const x = g.cen[s * 3], y = g.cen[s * 3 + 1], z = g.cen[s * 3 + 2];
+      const d = (x - frame.ox) * frame.nx + (y - frame.oy) * frame.ny + (z - frame.oz) * frame.nz;
+      if (Math.abs(d) > depthBand) continue;
+      const c = Decal.uv(frame, x, y, z, w, h);
+      if (Decal.sampleMask(mask, c.u, c.v)) out.push(s);
+    }
+    return out;
+  }
+  function cancelStamp() {
+    pendingDecal = null;
+    clearHoverPreview();
+    $("stampCancel").disabled = true;
+  }
+  $("stampCancel").addEventListener("click", cancelStamp);
+  $("stampApply").addEventListener("click", () => {
+    if (!stampImg) return;
+    const src = pendingDecal;
+    if (!src) { toast("Click the model to place the stamp first", true); return; }
+    const m = doc.meshes[src.meshIndex];
+    const { w, h } = stampWH();
+    const mask = stampMaskObj();
+    busy("Stamping…", () => {
+      let res;
+      if ($("stampRefine").checked) {
+        res = Cleanup.stampMask(m, src.frame, mask, w, h, paintState, { depthBand: Math.max(w, h), maxDepth: 4 });
+      } else {
+        const subs = decalPreviewSubs(m, src.frame, w, h, mask);
+        res = Cleanup.applyStates(m, subs, paintState);
+      }
+      if (!res.changedFaces.size) { toast("Nothing painted (adjust threshold or size)"); return; }
+      pushHistory("Stamp");
+      cancelStamp();
+      render(null);
+      ensureSubGraphs("Preparing tool…");
+      updateStats();
+    });
+  });
+  ["stampThresh", "stampInvert", "stampSize", "stampRot"].forEach((id) =>
+    $(id).addEventListener("input", () => {
+      if (activeTool !== "stamp" || !stampImg) return;
+      if (pendingDecal) { // rotation changed: rebuild the frozen frame's rotation
+        const f = pendingDecal.frame;
+        pendingDecal.frame = Decal.frame(f.ox, f.oy, f.oz, f.nx, f.ny, f.nz, 0, 1, 0, (+$("stampRot").value) * Math.PI / 180);
+        onHover(lastHit);
+      } else if (lastHit) onHover(lastHit);
+    }));
+
   function doFill(hit) {
     if (previewActive) { restore(current()); previewActive = false; }
     clearHoverPreview();
@@ -568,6 +651,14 @@
     if (activeTool === "ring") doRing(hit);
     else if (activeTool === "fill") (fillSmart() ? doSmartFill : doFill)(hit);
     else if (activeTool === "split") doSplit(hit);
+    else if (activeTool === "stamp") {
+      if (!stampImg || !hit || hit.localSub == null) return;
+      pendingDecal = { meshIndex: hit.meshIndex,
+        frame: Decal.frame(hit.point.x, hit.point.y, hit.point.z, hit.normal.x, hit.normal.y, hit.normal.z,
+          0, 1, 0, (+$("stampRot").value) * Math.PI / 180) };
+      $("stampCancel").disabled = false;
+      onHover(hit); // refresh preview at the frozen frame
+    }
   });
 
   function cutPlane() {
