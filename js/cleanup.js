@@ -241,38 +241,17 @@
     return qx * qx + qy * qy + qz * qz;
   }
 
-  /* Slicer-style stamp painting: paint leaves fully inside the stamp union and
-   * SUBDIVIDE leaves crossing the stamp edge (4-way splits, depth-capped), so
-   * stroke edges follow the brush instead of whole leaves. Child geometry uses
-   * Paint.tessellate's exact conventions (corner rotation by `special`,
-   * midpoints, reversed kid order). Trees are re-collapsed and re-encoded.
-   * stamps: [{x,y,z,r}]. Returns { count, changedFaces }.
-   * maxDepth is ABSOLUTE depth from the face root (not additional levels), so
-   * leaves the slicer already split deeply refine less — their leaves are tiny
-   * (~4^-depth of the face), keeping edge error sub-leaf-sized either way. */
-  function paintStamps(mesh, stamps, state, opts) {
+  /* Shared refinement walker: paint leaves fully inside a region and SUBDIVIDE
+   * leaves crossing its edge (depth-capped), matching Paint.tessellate's exact
+   * conventions. Callbacks:
+   *   faceInRange(x0..x2) -> bool  broad-phase reject per root face
+   *   overlaps(ax..cz)    -> bool  does this leaf touch the region?
+   *   covered(x,y,z)      -> bool  is this point inside the region?
+   * Returns { count, changedFaces }. */
+  function refinePaint(mesh, state, opts) {
     const maxDepth = (opts && opts.maxDepth) || 4;
+    const { faceInRange, overlaps, covered } = opts;
     const P = mesh.positions;
-    const covered = (x, y, z) => {
-      for (const s of stamps) {
-        const dx = x - s.x, dy = y - s.y, dz = z - s.z;
-        if (dx * dx + dy * dy + dz * dz <= s.r * s.r) return true;
-      }
-      return false;
-    };
-    const overlaps = (ax, ay, az, bx, by, bz, cx, cy, cz) => {
-      for (const s of stamps) {
-        if (dist2PointTri(s.x, s.y, s.z, ax, ay, az, bx, by, bz, cx, cy, cz) <= s.r * s.r) return true;
-      }
-      return false;
-    };
-    // broad phase: stamp union AABB vs face AABB
-    let sx0 = Infinity, sy0 = Infinity, sz0 = Infinity, sx1 = -Infinity, sy1 = -Infinity, sz1 = -Infinity;
-    for (const s of stamps) {
-      sx0 = Math.min(sx0, s.x - s.r); sy0 = Math.min(sy0, s.y - s.r); sz0 = Math.min(sz0, s.z - s.r);
-      sx1 = Math.max(sx1, s.x + s.r); sy1 = Math.max(sy1, s.y + s.r); sz1 = Math.max(sz1, s.z + s.r);
-    }
-
     let count = 0;
     const changedFaces = new Set();
     let faceChanged = false;
@@ -306,7 +285,7 @@
       const Ax = cs[A], Ay = cs[A + 1], Az = cs[A + 2];
       const Bx = cs[B], By = cs[B + 1], Bz = cs[B + 2];
       const Dx = cs[D], Dy = cs[D + 1], Dz = cs[D + 2];
-      const k = (g) => kids[split - g]; // tessellate's reversed kid mapping
+      const k = (gk) => kids[split - gk]; // tessellate's reversed kid mapping
       if (split === 1) {
         const mx = (Bx + Dx) / 2, my = (By + Dy) / 2, mz = (Bz + Dz) / 2;
         walk(k(0), depth + 1, Ax, Ay, Az, Bx, By, Bz, mx, my, mz);
@@ -333,9 +312,7 @@
       const x0 = P[a], y0 = P[a + 1], z0 = P[a + 2];
       const x1 = P[b], y1 = P[b + 1], z1 = P[b + 2];
       const x2 = P[c], y2 = P[c + 1], z2 = P[c + 2];
-      if (Math.max(x0, x1, x2) < sx0 || Math.min(x0, x1, x2) > sx1 ||
-          Math.max(y0, y1, y2) < sy0 || Math.min(y0, y1, y2) > sy1 ||
-          Math.max(z0, z1, z2) < sz0 || Math.min(z0, z1, z2) > sz1) continue;
+      if (!faceInRange(x0, y0, z0, x1, y1, z1, x2, y2, z2)) continue;
       const tree = Paint.decode(mesh.paints[f]);
       faceChanged = false;
       walk(tree, 0, x0, y0, z0, x1, y1, z1, x2, y2, z2);
@@ -350,12 +327,87 @@
     return { count, changedFaces };
   }
 
+  /* Slicer-style stamp painting: paint leaves fully inside the stamp union and
+   * SUBDIVIDE leaves crossing the stamp edge (4-way splits, depth-capped), so
+   * stroke edges follow the brush instead of whole leaves. Child geometry uses
+   * Paint.tessellate's exact conventions (corner rotation by `special`,
+   * midpoints, reversed kid order). Trees are re-collapsed and re-encoded.
+   * stamps: [{x,y,z,r}]. Returns { count, changedFaces }.
+   * maxDepth is ABSOLUTE depth from the face root (not additional levels), so
+   * leaves the slicer already split deeply refine less — their leaves are tiny
+   * (~4^-depth of the face), keeping edge error sub-leaf-sized either way. */
+  function paintStamps(mesh, stamps, state, opts) {
+    const covered = (x, y, z) => {
+      for (const s of stamps) {
+        const dx = x - s.x, dy = y - s.y, dz = z - s.z;
+        if (dx * dx + dy * dy + dz * dz <= s.r * s.r) return true;
+      }
+      return false;
+    };
+    const overlaps = (ax, ay, az, bx, by, bz, cx, cy, cz) => {
+      for (const s of stamps) {
+        if (dist2PointTri(s.x, s.y, s.z, ax, ay, az, bx, by, bz, cx, cy, cz) <= s.r * s.r) return true;
+      }
+      return false;
+    };
+    // broad phase: stamp union AABB vs face AABB
+    let sx0 = Infinity, sy0 = Infinity, sz0 = Infinity, sx1 = -Infinity, sy1 = -Infinity, sz1 = -Infinity;
+    for (const s of stamps) {
+      sx0 = Math.min(sx0, s.x - s.r); sy0 = Math.min(sy0, s.y - s.r); sz0 = Math.min(sz0, s.z - s.r);
+      sx1 = Math.max(sx1, s.x + s.r); sy1 = Math.max(sy1, s.y + s.r); sz1 = Math.max(sz1, s.z + s.r);
+    }
+    const faceInRange = (x0, y0, z0, x1, y1, z1, x2, y2, z2) =>
+      !(Math.max(x0, x1, x2) < sx0 || Math.min(x0, x1, x2) > sx1 ||
+        Math.max(y0, y1, y2) < sy0 || Math.min(y0, y1, y2) > sy1 ||
+        Math.max(z0, z1, z2) < sz0 || Math.min(z0, z1, z2) > sz1);
+    return refinePaint(mesh, state, { faceInRange, overlaps, covered, maxDepth: (opts && opts.maxDepth) || 4 });
+  }
+
+  /* Project a B&W image mask through a Decal frame onto front-facing leaves
+   * within depthBand of the decal plane. frame from Decal.frame; w,h are the
+   * decal's world extents; mask is { data, w, h, threshold, invert }. */
+  function stampMask(mesh, frame, mask, w, h, state, opts) {
+    const depthBand = (opts && opts.depthBand != null) ? opts.depthBand : Math.max(w, h);
+    const nx = frame.nx, ny = frame.ny, nz = frame.nz;
+    const covered = (x, y, z) => {
+      const d = (x - frame.ox) * nx + (y - frame.oy) * ny + (z - frame.oz) * nz;
+      if (Math.abs(d) > depthBand) return false;
+      const c = Decal.uv(frame, x, y, z, w, h);
+      return Decal.sampleMask(mask, c.u, c.v);
+    };
+    const overlaps = (ax, ay, az, bx, by, bz, cx, cy, cz) => {
+      const mx = (ax + bx + cx) / 3, my = (ay + by + cy) / 3, mz = (az + bz + cz) / 3;
+      return covered(ax, ay, az) || covered(bx, by, bz) || covered(cx, cy, cz) || covered(mx, my, mz);
+    };
+    // broad phase: face AABB vs decal sphere (radius = half-diagonal + depthBand)
+    // AND front-facing (root-face normal · decal normal > 0).
+    const reach = Math.hypot(w, h) / 2 + depthBand;
+    const faceInRange = (x0, y0, z0, x1, y1, z1, x2, y2, z2) => {
+      // facing
+      const ux = x1 - x0, uy = y1 - y0, uz = z1 - z0;
+      const vx = x2 - x0, vy = y2 - y0, vz = z2 - z0;
+      const fnx = uy * vz - uz * vy, fny = uz * vx - ux * vz, fnz = ux * vy - uy * vx;
+      if (fnx * nx + fny * ny + fnz * nz <= 0) return false;
+      // AABB vs sphere around the decal origin
+      const clamp = (val, lo, hi) => (val < lo ? lo : val > hi ? hi : val);
+      const bx0 = Math.min(x0, x1, x2), bx1 = Math.max(x0, x1, x2);
+      const by0 = Math.min(y0, y1, y2), by1 = Math.max(y0, y1, y2);
+      const bz0 = Math.min(z0, z1, z2), bz1 = Math.max(z0, z1, z2);
+      const qx = clamp(frame.ox, bx0, bx1) - frame.ox;
+      const qy = clamp(frame.oy, by0, by1) - frame.oy;
+      const qz = clamp(frame.oz, bz0, bz1) - frame.oz;
+      return qx * qx + qy * qy + qz * qz <= reach * reach;
+    };
+    return refinePaint(mesh, state, { faceInRange, overlaps, covered, maxDepth: (opts && opts.maxDepth) || 4 });
+  }
+
   Object.assign(Cleanup, {
     applyStates,
     removeIslandsSub,
     fillRegion,
     paintFacesSolid,
     paintStamps,
+    stampMask,
     remapStates,
   });
 })(window);

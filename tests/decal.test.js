@@ -1,6 +1,11 @@
 const test = require("node:test");
 const assert = require("node:assert");
 const { loadModules } = require("./harness");
+const { makeBigTriangle } = require("./harness");
+
+function totalLeaves(Paint, mesh) {
+  let n = 0; for (const p of mesh.paints) n += Paint.leafCount(Paint.decode(p)); return n;
+}
 
 test("frame is orthonormal with n preserved", () => {
   const { Decal } = loadModules();
@@ -43,4 +48,42 @@ test("sampleMask thresholds and inverts; out-of-range is transparent", () => {
   assert.equal(Decal.sampleMask(mask, 1.5, 0.5), false);   // out of range
   const inv = Object.assign({}, mask, { invert: true });
   assert.equal(Decal.sampleMask(inv, 0.25, 0.75), false);  // inverted: black now transparent
+});
+
+test("stampMask with an all-black mask paints the covered footprint", () => {
+  const { Paint, Cleanup, Decal } = loadModules();
+  const mesh = makeBigTriangle();
+  const g = Cleanup.buildSubGraph(mesh);
+  // pick the centroid of sub 0 and its face normal ~ +Z for makeBigTriangle (in XY plane)
+  const cx = g.cen[0], cy = g.cen[1], cz = g.cen[2];
+  const f = Decal.frame(cx, cy, cz, 0, 0, 1, 0, 1, 0, 0);
+  const mask = { data: Uint8Array.from([0]), w: 1, h: 1, threshold: 128, invert: false }; // all black
+  const res = Cleanup.stampMask(mesh, f, mask, 100, 100, 3, { depthBand: 1, maxDepth: 4 });
+  assert.ok(res.count > 0, "painted some leaves");
+});
+
+test("stampMask with an all-white mask paints nothing", () => {
+  const { Cleanup, Decal } = loadModules();
+  const mesh = makeBigTriangle();
+  const g = Cleanup.buildSubGraph(mesh);
+  const f = Decal.frame(g.cen[0], g.cen[1], g.cen[2], 0, 0, 1, 0, 1, 0, 0);
+  const mask = { data: Uint8Array.from([255]), w: 1, h: 1, threshold: 128, invert: false };
+  const res = Cleanup.stampMask(mesh, f, mask, 100, 100, 3, { depthBand: 1, maxDepth: 4 });
+  assert.equal(res.count, 0, "nothing painted");
+});
+
+test("stampMask half/half mask subdivides only near the boundary", () => {
+  const { Paint, Cleanup, Decal } = loadModules();
+  const mesh = makeBigTriangle();
+  const g = Cleanup.buildSubGraph(mesh);
+  const before = totalLeaves(Paint, mesh);
+  // big footprint centered on the triangle, left half black / right half white
+  const bx = (g.vx.reduce((a, b) => a + b, 0)) / g.NV;
+  const by = (g.vy.reduce((a, b) => a + b, 0)) / g.NV;
+  const bz = (g.vz.reduce((a, b) => a + b, 0)) / g.NV;
+  const f = Decal.frame(bx, by, bz, 0, 0, 1, 0, 1, 0, 0);
+  const mask = { data: Uint8Array.from([0, 255]), w: 2, h: 1, threshold: 128, invert: false };
+  const res = Cleanup.stampMask(mesh, f, mask, 1000, 1000, 3, { depthBand: 5, maxDepth: 4 });
+  assert.ok(res.count > 0, "painted the black half");
+  assert.ok(totalLeaves(Paint, mesh) > before, "subdivided near the black/white edge");
 });
