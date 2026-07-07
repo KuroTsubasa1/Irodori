@@ -36,6 +36,26 @@ test("uv maps origin to center and axes to ±0.5", () => {
   // move one full half-width along r -> u = 1.0
   const p = Decal.uv(f, f.rx, f.ry, f.rz, 2, 2); // point at distance 1 along r; w=2 -> +0.5
   assert.ok(Math.abs(p.u - 1.0) < 1e-9, "u at +half-width");
+  // move one full half-width along -r -> u = 0
+  const q = Decal.uv(f, -f.rx, -f.ry, -f.rz, 2, 2);
+  assert.ok(Math.abs(q.u - 0.0) < 1e-9, "u at -half-width");
+  // move one full half-height along u-axis -> v = 1.0
+  const r = Decal.uv(f, f.ux, f.uy, f.uz, 2, 2);
+  assert.ok(Math.abs(r.v - 1.0) < 1e-9, "v at +half-height");
+});
+
+test("frame rotation: rotRad=PI/2 about N=+Z rotates refUp=+Y CCW to u≈(-1,0,0)", () => {
+  const { Decal } = loadModules();
+  const f = Decal.frame(0, 0, 0, 0, 0, 1, 0, 1, 0, Math.PI / 2);
+  assert.ok(Math.abs(f.ux - -1) < 1e-9 && Math.abs(f.uy) < 1e-9 && Math.abs(f.uz) < 1e-9,
+    `expected u≈(-1,0,0), got (${f.ux},${f.uy},${f.uz})`);
+  const dot = (ax, ay, az, bx, by, bz) => ax * bx + ay * by + az * bz;
+  assert.ok(Math.abs(dot(f.rx, f.ry, f.rz, f.ux, f.uy, f.uz)) < 1e-9, "r⊥u");
+  assert.ok(Math.abs(dot(f.rx, f.ry, f.rz, f.nx, f.ny, f.nz)) < 1e-9, "r⊥n");
+  assert.ok(Math.abs(dot(f.ux, f.uy, f.uz, f.nx, f.ny, f.nz)) < 1e-9, "u⊥n");
+  assert.ok(Math.abs(Math.hypot(f.rx, f.ry, f.rz) - 1) < 1e-9, "r unit");
+  assert.ok(Math.abs(Math.hypot(f.ux, f.uy, f.uz) - 1) < 1e-9, "u unit");
+  assert.ok(Math.abs(Math.hypot(f.nx, f.ny, f.nz) - 1) < 1e-9, "n unit");
 });
 
 test("sampleMask thresholds and inverts; out-of-range is transparent", () => {

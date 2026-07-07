@@ -146,6 +146,7 @@
       if (!doc.meshes.length) { toast("No mesh found in this .3mf", true); return; }
       splitParts = [];
       isolated = null;
+      pendingDecal = null;
       Viewer.setVisibleMeshes(null);
       Viewer.setPartVisibility(null);
       for (const m of doc.meshes) Cleanup.computeDominant(m);
@@ -424,6 +425,7 @@
       const res = Cleanup.paintStamps(m, expanded, paintState, { maxDepth: 4 });
       if (!res.count) { render(null); return; } // painted same-over-same: just restore the live tint
       pushHistory("Brush");
+      Cleanup.buildSubGraph(m); // re-warm under this spinner so the next mousedown doesn't stall
       render(null);
       updateStats();
     });
@@ -552,15 +554,22 @@
     return { data: stampImg.mask.data, w: stampImg.mask.w, h: stampImg.mask.h,
              threshold: +$("stampThresh").value, invert: $("stampInvert").checked };
   }
+  // Shallow, shared depth band so preview and both commit paths agree (guards thin-wall bleed-through).
+  const stampDepthBand = (w, h) => 0.2 * Math.max(w, h);
   // Whole-leaf preview: which local subs sample as "paint" under this frame.
   function decalPreviewSubs(m, frame, w, h, mask) {
     const g = Cleanup.buildSubGraph(m);
-    const depthBand = Math.max(w, h);
+    const depthBand = stampDepthBand(w, h);
     const out = [];
     for (let s = 0; s < g.NS; s++) {
       const x = g.cen[s * 3], y = g.cen[s * 3 + 1], z = g.cen[s * 3 + 2];
       const d = (x - frame.ox) * frame.nx + (y - frame.oy) * frame.ny + (z - frame.oz) * frame.nz;
       if (Math.abs(d) > depthBand) continue;
+      const a = g.sv[s * 3], b = g.sv[s * 3 + 1], c2 = g.sv[s * 3 + 2];
+      const ex1 = g.vx[b] - g.vx[a], ey1 = g.vy[b] - g.vy[a], ez1 = g.vz[b] - g.vz[a];
+      const ex2 = g.vx[c2] - g.vx[a], ey2 = g.vy[c2] - g.vy[a], ez2 = g.vz[c2] - g.vz[a];
+      const fnx = ey1 * ez2 - ez1 * ey2, fny = ez1 * ex2 - ex1 * ez2, fnz = ex1 * ey2 - ey1 * ex2;
+      if (fnx * frame.nx + fny * frame.ny + fnz * frame.nz <= 0) continue; // back-facing
       const c = Decal.uv(frame, x, y, z, w, h);
       if (Decal.sampleMask(mask, c.u, c.v)) out.push(s);
     }
@@ -582,7 +591,7 @@
     busy("Stamping…", () => {
       let res;
       if ($("stampRefine").checked) {
-        res = Cleanup.stampMask(m, src.frame, mask, w, h, paintState, { depthBand: Math.max(w, h), maxDepth: 4 });
+        res = Cleanup.stampMask(m, src.frame, mask, w, h, paintState, { depthBand: stampDepthBand(w, h), maxDepth: 4 });
       } else {
         const subs = decalPreviewSubs(m, src.frame, w, h, mask);
         res = Cleanup.applyStates(m, subs, paintState);
