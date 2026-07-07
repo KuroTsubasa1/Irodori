@@ -146,6 +146,7 @@
       if (!doc.meshes.length) { toast("No mesh found in this .3mf", true); return; }
       splitParts = [];
       isolated = null;
+      pendingDecal = null;
       Viewer.setVisibleMeshes(null);
       Viewer.setPartVisibility(null);
       for (const m of doc.meshes) Cleanup.computeDominant(m);
@@ -253,6 +254,7 @@
       render(null);
       updateStats();
       toast("Color removed · repainted to default where used");
+      ensureSubGraphs("Preparing tool…");
     });
   }
 
@@ -317,19 +319,26 @@
     const r = sizeDotPx(+$("ringThick").value);
     $("ringPrev").style.width = $("ringPrev").style.height = r + "px";
   }
+  // Warm the sub-triangle graph for every mesh that lost it (paint ops that
+  // subdivide invalidate it). Runs under a spinner so the rebuild never blocks
+  // a mouse event at the start of the next stroke.
+  function ensureSubGraphs(msg) {
+    if (doc && doc.meshes.some((m) => !m._sub)) {
+      busy(msg || "Preparing tool…", () => { for (const m of doc.meshes) Cleanup.buildSubGraph(m); });
+    }
+  }
   function setTool(name) {
     activeTool = name;
     document.querySelectorAll("#toolbar .tool").forEach((b) => b.classList.toggle("active", b.dataset.tool === name));
     document.querySelectorAll("#optionsbar .opt").forEach((p) => (p.hidden = p.dataset.panel !== name));
-    const paintTool = name === "brush" || name === "ring" || name === "fill";
+    const paintTool = name === "brush" || name === "ring" || name === "fill" || name === "stamp";
     $("palette").classList.toggle("hide", !paintTool);
-    Viewer.setTool(name === "brush" ? "paint" : (name === "ring" || name === "fill" || name === "split") ? "pick" : "orbit");
-    Viewer.enableHover(name === "brush" || name === "ring" || name === "split" || name === "fill");
+    Viewer.setTool(name === "brush" ? "paint" : (name === "ring" || name === "fill" || name === "split" || name === "stamp") ? "pick" : "orbit");
+    Viewer.enableHover(name === "brush" || name === "ring" || name === "split" || name === "fill" || name === "stamp");
+    if (name !== "stamp" && typeof cancelStamp === "function") cancelStamp();
     if (name !== "split" && name !== "ring" && name !== "fill") clearHoverPreview();
     if (name === "cut") updateCutPlane(); else Viewer.setCutPlane(null);
-    if (doc && (paintTool || name === "split") && doc.meshes.some((m) => !m._sub)) {
-      busy("Preparing tool…", () => { for (const m of doc.meshes) Cleanup.buildSubGraph(m); });
-    }
+    if (doc && (paintTool || name === "split")) ensureSubGraphs("Preparing tool…");
     updateSizeDots();
   }
 
@@ -357,12 +366,14 @@
     computeModelSize();
     render(null);
     Viewer.frame();
+    ensureSubGraphs("Preparing tool…");
   }
 
   // ---------- brush / ring / fill ----------
   function startStroke(hit) {
     if (paintState == null) return;
     if (previewActive) { restore(current()); previewActive = false; }
+    ensureSubGraphs("Preparing tool…");
     stroke = { mi: hit.meshIndex, pend: new Set(), stamps: [] };
     brushAt(hit);
   }
@@ -397,14 +408,24 @@
   }
   function endStroke() {
     if (!stroke) return;
-    const m = doc.meshes[stroke.mi], stamps = stroke.stamps;
+    const m = doc.meshes[stroke.mi], stamps = stroke.stamps, pend = stroke.pend;
     stroke = null;
     if (!stamps.length) return;
+    if (!$("brushRefine").checked) {
+      // refine off: commit the whole-leaf live preview (state-only, no subdivision)
+      const res = Cleanup.applyStates(m, [...pend], paintState);
+      if (!res.changedFaces.size) { render(null); return; } // painted same-over-same
+      pushHistory("Brush");
+      render(null);
+      updateStats();
+      return;
+    }
     const expanded = Cleanup.mirrorStamps(m, stamps, enabledAxes());
     busy("Refining stroke…", () => {
       const res = Cleanup.paintStamps(m, expanded, paintState, { maxDepth: 4 });
       if (!res.count) { render(null); return; } // painted same-over-same: just restore the live tint
       pushHistory("Brush");
+      Cleanup.buildSubGraph(m); // re-warm under this spinner so the next mousedown doesn't stall
       render(null);
       updateStats();
     });
@@ -438,6 +459,25 @@
 
   function onHover(hit) {
     lastHit = hit;
+    if (activeTool === "stamp") {
+      Viewer.hideCursor();
+      if (!stampImg) return;
+      // while un-placed, follow the hover point; once placed, keep pendingDecal
+      const src = pendingDecal || (hit && hit.localSub != null
+        ? { meshIndex: hit.meshIndex, frame: Decal.frame(hit.point.x, hit.point.y, hit.point.z,
+              hit.normal.x, hit.normal.y, hit.normal.z, 0, 1, 0, (+$("stampRot").value) * Math.PI / 180) }
+        : null);
+      if (!src) { clearHoverPreview(); return; }
+      clearHoverPreview();
+      const m = doc.meshes[src.meshIndex];
+      const { w, h } = stampWH();
+      const subs = decalPreviewSubs(m, src.frame, w, h, stampMaskObj());
+      const g = [];
+      for (const s of subs) { const gi = Viewer.toGlobalSub(src.meshIndex, s); if (gi >= 0) g.push(gi); }
+      Viewer.setPreview(g);
+      previewCache = { tool: "stamp", meshIndex: src.meshIndex, members: new Set(subs), globalSubs: g, subs };
+      return;
+    }
     if (activeTool === "split" || activeTool === "ring" || activeTool === "fill") {
       Viewer.hideCursor();
       if (!hit || hit.localSub == null) { clearHoverPreview(); return; }
@@ -473,6 +513,107 @@
     }
   }
   Viewer.onHover(onHover);
+
+  // ---------- stamp tool ----------
+  let stampImg = null; // { mask:{data,w,h}, aspect }
+  $("stampFile").addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const img = new Image();
+    img.onload = () => {
+      const MAXD = 512; // cap decode resolution
+      let w = img.width, h = img.height;
+      const sc = Math.min(1, MAXD / Math.max(w, h));
+      w = Math.max(1, Math.round(w * sc)); h = Math.max(1, Math.round(h * sc));
+      const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+      const ctx = cv.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      const px = ctx.getImageData(0, 0, w, h).data;
+      const lum = new Uint8Array(w * h);
+      for (let i = 0; i < w * h; i++) {
+        const r = px[i * 4], gg = px[i * 4 + 1], b = px[i * 4 + 2];
+        lum[i] = (0.299 * r + 0.587 * gg + 0.114 * b) | 0;
+      }
+      stampImg = { mask: { data: lum, w, h }, aspect: w / h };
+      $("stampApply").disabled = false;
+      toast("Image loaded — click the model to place");
+      if (lastHit) onHover(lastHit);
+    };
+    img.onerror = () => toast("Could not read that image", true);
+    img.src = URL.createObjectURL(file);
+  });
+
+  let pendingDecal = null; // { meshIndex, frame } once the user clicks to place
+  const stampSizeWorld = () => { const t = (+$("stampSize").value) / 100; return modelSize * (0.02 + 0.5 * t); };
+  function stampWH() {
+    const s = stampSizeWorld();
+    const a = stampImg ? stampImg.aspect : 1;
+    return a >= 1 ? { w: s, h: s / a } : { w: s * a, h: s }; // longest edge = s
+  }
+  function stampMaskObj() {
+    return { data: stampImg.mask.data, w: stampImg.mask.w, h: stampImg.mask.h,
+             threshold: +$("stampThresh").value, invert: $("stampInvert").checked };
+  }
+  // Shallow, shared depth band so preview and both commit paths agree (guards thin-wall bleed-through).
+  const stampDepthBand = (w, h) => 0.2 * Math.max(w, h);
+  // Whole-leaf preview: which local subs sample as "paint" under this frame.
+  function decalPreviewSubs(m, frame, w, h, mask) {
+    const g = Cleanup.buildSubGraph(m);
+    const depthBand = stampDepthBand(w, h);
+    const out = [];
+    for (let s = 0; s < g.NS; s++) {
+      const x = g.cen[s * 3], y = g.cen[s * 3 + 1], z = g.cen[s * 3 + 2];
+      const d = (x - frame.ox) * frame.nx + (y - frame.oy) * frame.ny + (z - frame.oz) * frame.nz;
+      if (Math.abs(d) > depthBand) continue;
+      const a = g.sv[s * 3], b = g.sv[s * 3 + 1], c2 = g.sv[s * 3 + 2];
+      const ex1 = g.vx[b] - g.vx[a], ey1 = g.vy[b] - g.vy[a], ez1 = g.vz[b] - g.vz[a];
+      const ex2 = g.vx[c2] - g.vx[a], ey2 = g.vy[c2] - g.vy[a], ez2 = g.vz[c2] - g.vz[a];
+      const fnx = ey1 * ez2 - ez1 * ey2, fny = ez1 * ex2 - ex1 * ez2, fnz = ex1 * ey2 - ey1 * ex2;
+      if (fnx * frame.nx + fny * frame.ny + fnz * frame.nz <= 0) continue; // back-facing
+      const c = Decal.uv(frame, x, y, z, w, h);
+      if (Decal.sampleMask(mask, c.u, c.v)) out.push(s);
+    }
+    return out;
+  }
+  function cancelStamp() {
+    pendingDecal = null;
+    clearHoverPreview();
+    $("stampCancel").disabled = true;
+  }
+  $("stampCancel").addEventListener("click", cancelStamp);
+  $("stampApply").addEventListener("click", () => {
+    if (!stampImg) return;
+    const src = pendingDecal;
+    if (!src) { toast("Click the model to place the stamp first", true); return; }
+    const m = doc.meshes[src.meshIndex];
+    const { w, h } = stampWH();
+    const mask = stampMaskObj();
+    busy("Stamping…", () => {
+      let res;
+      if ($("stampRefine").checked) {
+        res = Cleanup.stampMask(m, src.frame, mask, w, h, paintState, { depthBand: stampDepthBand(w, h), maxDepth: 4 });
+      } else {
+        const subs = decalPreviewSubs(m, src.frame, w, h, mask);
+        res = Cleanup.applyStates(m, subs, paintState);
+      }
+      if (!res.changedFaces.size) { toast("Nothing painted (adjust threshold or size)"); return; }
+      pushHistory("Stamp");
+      cancelStamp();
+      render(null);
+      ensureSubGraphs("Preparing tool…");
+      updateStats();
+    });
+  });
+  ["stampThresh", "stampInvert", "stampSize", "stampRot"].forEach((id) =>
+    $(id).addEventListener("input", () => {
+      if (activeTool !== "stamp" || !stampImg) return;
+      if (pendingDecal) { // rotation changed: rebuild the frozen frame's rotation
+        const f = pendingDecal.frame;
+        pendingDecal.frame = Decal.frame(f.ox, f.oy, f.oz, f.nx, f.ny, f.nz, 0, 1, 0, (+$("stampRot").value) * Math.PI / 180);
+        onHover(lastHit);
+      } else if (lastHit) onHover(lastHit);
+    }));
+
   function doFill(hit) {
     if (previewActive) { restore(current()); previewActive = false; }
     clearHoverPreview();
@@ -519,6 +660,14 @@
     if (activeTool === "ring") doRing(hit);
     else if (activeTool === "fill") (fillSmart() ? doSmartFill : doFill)(hit);
     else if (activeTool === "split") doSplit(hit);
+    else if (activeTool === "stamp") {
+      if (!stampImg || !hit || hit.localSub == null) return;
+      pendingDecal = { meshIndex: hit.meshIndex,
+        frame: Decal.frame(hit.point.x, hit.point.y, hit.point.z, hit.normal.x, hit.normal.y, hit.normal.z,
+          0, 1, 0, (+$("stampRot").value) * Math.PI / 180) };
+      $("stampCancel").disabled = false;
+      onHover(hit); // refresh preview at the frozen frame
+    }
   });
 
   function cutPlane() {
@@ -570,6 +719,7 @@
       buildObjects();
       updateStats();
       updateCutPlane();
+      ensureSubGraphs("Preparing tool…");
       toast("Cut into " + doc.meshes.length + " object(s)");
     });
   }
@@ -836,7 +986,7 @@
     if (e.key === "Escape") { $("orientPop").hidden = true; setTool("orbit"); return; }
     const k = e.key.toLowerCase();
     if (k === "r") { e.preventDefault(); $("orientPop").hidden = !$("orientPop").hidden; return; }
-    const tool = { o: "orbit", b: "brush", n: "ring", f: "fill", s: "split", c: "cut" }[k];
+    const tool = { o: "orbit", b: "brush", n: "ring", f: "fill", s: "split", c: "cut", t: "stamp" }[k];
     if (tool) { e.preventDefault(); setTool(tool); }
   });
 
