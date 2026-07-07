@@ -253,6 +253,7 @@
       render(null);
       updateStats();
       toast("Color removed · repainted to default where used");
+      ensureSubGraphs("Preparing tool…");
     });
   }
 
@@ -317,6 +318,14 @@
     const r = sizeDotPx(+$("ringThick").value);
     $("ringPrev").style.width = $("ringPrev").style.height = r + "px";
   }
+  // Warm the sub-triangle graph for every mesh that lost it (paint ops that
+  // subdivide invalidate it). Runs under a spinner so the rebuild never blocks
+  // a mouse event at the start of the next stroke.
+  function ensureSubGraphs(msg) {
+    if (doc && doc.meshes.some((m) => !m._sub)) {
+      busy(msg || "Preparing tool…", () => { for (const m of doc.meshes) Cleanup.buildSubGraph(m); });
+    }
+  }
   function setTool(name) {
     activeTool = name;
     document.querySelectorAll("#toolbar .tool").forEach((b) => b.classList.toggle("active", b.dataset.tool === name));
@@ -327,9 +336,7 @@
     Viewer.enableHover(name === "brush" || name === "ring" || name === "split" || name === "fill");
     if (name !== "split" && name !== "ring" && name !== "fill") clearHoverPreview();
     if (name === "cut") updateCutPlane(); else Viewer.setCutPlane(null);
-    if (doc && (paintTool || name === "split") && doc.meshes.some((m) => !m._sub)) {
-      busy("Preparing tool…", () => { for (const m of doc.meshes) Cleanup.buildSubGraph(m); });
-    }
+    if (doc && (paintTool || name === "split")) ensureSubGraphs("Preparing tool…");
     updateSizeDots();
   }
 
@@ -357,12 +364,14 @@
     computeModelSize();
     render(null);
     Viewer.frame();
+    ensureSubGraphs("Preparing tool…");
   }
 
   // ---------- brush / ring / fill ----------
   function startStroke(hit) {
     if (paintState == null) return;
     if (previewActive) { restore(current()); previewActive = false; }
+    ensureSubGraphs("Preparing tool…");
     stroke = { mi: hit.meshIndex, pend: new Set(), stamps: [] };
     brushAt(hit);
   }
@@ -579,6 +588,7 @@
       buildObjects();
       updateStats();
       updateCutPlane();
+      ensureSubGraphs("Preparing tool…");
       toast("Cut into " + doc.meshes.length + " object(s)");
     });
   }
