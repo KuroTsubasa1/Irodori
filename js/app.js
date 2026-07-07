@@ -397,9 +397,18 @@
   }
   function endStroke() {
     if (!stroke) return;
-    const m = doc.meshes[stroke.mi], stamps = stroke.stamps;
+    const m = doc.meshes[stroke.mi], stamps = stroke.stamps, pend = stroke.pend;
     stroke = null;
     if (!stamps.length) return;
+    if (!$("brushRefine").checked) {
+      // refine off: commit the whole-leaf live preview (state-only, no subdivision)
+      const res = Cleanup.applyStates(m, [...pend], paintState);
+      if (!res.changedFaces.size) { render(null); return; } // painted same-over-same
+      pushHistory("Brush");
+      render(null);
+      updateStats();
+      return;
+    }
     const expanded = Cleanup.mirrorStamps(m, stamps, enabledAxes());
     busy("Refining stroke…", () => {
       const res = Cleanup.paintStamps(m, expanded, paintState, { maxDepth: 4 });
