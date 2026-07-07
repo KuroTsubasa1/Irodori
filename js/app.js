@@ -330,10 +330,11 @@
     activeTool = name;
     document.querySelectorAll("#toolbar .tool").forEach((b) => b.classList.toggle("active", b.dataset.tool === name));
     document.querySelectorAll("#optionsbar .opt").forEach((p) => (p.hidden = p.dataset.panel !== name));
-    const paintTool = name === "brush" || name === "ring" || name === "fill";
+    const paintTool = name === "brush" || name === "ring" || name === "fill" || name === "stamp";
     $("palette").classList.toggle("hide", !paintTool);
-    Viewer.setTool(name === "brush" ? "paint" : (name === "ring" || name === "fill" || name === "split") ? "pick" : "orbit");
-    Viewer.enableHover(name === "brush" || name === "ring" || name === "split" || name === "fill");
+    Viewer.setTool(name === "brush" ? "paint" : (name === "ring" || name === "fill" || name === "split" || name === "stamp") ? "pick" : "orbit");
+    Viewer.enableHover(name === "brush" || name === "ring" || name === "split" || name === "fill" || name === "stamp");
+    if (name !== "stamp" && typeof cancelStamp === "function") cancelStamp();
     if (name !== "split" && name !== "ring" && name !== "fill") clearHoverPreview();
     if (name === "cut") updateCutPlane(); else Viewer.setCutPlane(null);
     if (doc && (paintTool || name === "split")) ensureSubGraphs("Preparing tool…");
@@ -491,6 +492,36 @@
     }
   }
   Viewer.onHover(onHover);
+
+  // ---------- stamp tool ----------
+  let stampImg = null; // { mask:{data,w,h}, aspect }
+  $("stampFile").addEventListener("change", (e) => {
+    const file = e.target.files && e.target.files[0];
+    if (!file) return;
+    const img = new Image();
+    img.onload = () => {
+      const MAXD = 512; // cap decode resolution
+      let w = img.width, h = img.height;
+      const sc = Math.min(1, MAXD / Math.max(w, h));
+      w = Math.max(1, Math.round(w * sc)); h = Math.max(1, Math.round(h * sc));
+      const cv = document.createElement("canvas"); cv.width = w; cv.height = h;
+      const ctx = cv.getContext("2d");
+      ctx.drawImage(img, 0, 0, w, h);
+      const px = ctx.getImageData(0, 0, w, h).data;
+      const lum = new Uint8Array(w * h);
+      for (let i = 0; i < w * h; i++) {
+        const r = px[i * 4], gg = px[i * 4 + 1], b = px[i * 4 + 2];
+        lum[i] = (0.299 * r + 0.587 * gg + 0.114 * b) | 0;
+      }
+      stampImg = { mask: { data: lum, w, h }, aspect: w / h };
+      $("stampApply").disabled = false;
+      toast("Image loaded — click the model to place");
+      if (lastHit) onHover(lastHit);
+    };
+    img.onerror = () => toast("Could not read that image", true);
+    img.src = URL.createObjectURL(file);
+  });
+
   function doFill(hit) {
     if (previewActive) { restore(current()); previewActive = false; }
     clearHoverPreview();
@@ -855,7 +886,7 @@
     if (e.key === "Escape") { $("orientPop").hidden = true; setTool("orbit"); return; }
     const k = e.key.toLowerCase();
     if (k === "r") { e.preventDefault(); $("orientPop").hidden = !$("orientPop").hidden; return; }
-    const tool = { o: "orbit", b: "brush", n: "ring", f: "fill", s: "split", c: "cut" }[k];
+    const tool = { o: "orbit", b: "brush", n: "ring", f: "fill", s: "split", c: "cut", t: "stamp" }[k];
     if (tool) { e.preventDefault(); setTool(tool); }
   });
 
