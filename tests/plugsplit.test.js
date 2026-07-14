@@ -34,3 +34,14 @@ test("inwardNormals: cube top region points straight down (-z)", () => {
     assert.ok(n[2] < -0.99, "each rim vertex inward is -z");
   }
 });
+
+test("farWallDepth: cube top -> bottom distance is 2; miss -> Infinity", () => {
+  const { Cleanup, Split } = loadModules();
+  const mesh = makeToppedCube(); // 2x2x2 cube
+  // ray from top-center straight down hits the bottom at t=2
+  const hit = Split._farWallDepth(mesh, [[1, 1, 2]], [[0, 0, -1]]);
+  assert.ok(Math.abs(hit - 2) < 1e-6, "expected 2, got " + hit);
+  // ray pointing away from the solid never exits through a front-facing wall
+  const miss = Split._farWallDepth(mesh, [[1, 1, 2]], [[0, 0, 1]]);
+  assert.equal(miss, Infinity);
+});

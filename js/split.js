@@ -26,6 +26,39 @@
     return { perVid, avg: unitIn(ax, ay, az) };
   }
 
+  // Nearest far-wall distance along inward rays (Moeller-Trumbore). Only counts
+  // hits where the ray EXITS through the face (dot(dir,n)>0) and t>EPS, so the
+  // origin face and coplanar neighbours are skipped. Infinity if nothing exits.
+  function farWallDepth(mesh, origins, dirs) {
+    const P = mesh.positions, v1 = mesh.v1, v2 = mesh.v2, v3 = mesh.v3, nf = mesh.nf;
+    const faceN = Cleanup.faceGraph(mesh).faceN;
+    const EPS = 1e-6;
+    let best = Infinity;
+    for (let i = 0; i < origins.length; i++) {
+      const ox = origins[i][0], oy = origins[i][1], oz = origins[i][2];
+      const dx = dirs[i][0], dy = dirs[i][1], dz = dirs[i][2];
+      for (let f = 0; f < nf; f++) {
+        if (faceN[f * 3] * dx + faceN[f * 3 + 1] * dy + faceN[f * 3 + 2] * dz <= 0) continue;
+        const a = v1[f] * 3, b = v2[f] * 3, c = v3[f] * 3;
+        const e1x = P[b] - P[a], e1y = P[b + 1] - P[a + 1], e1z = P[b + 2] - P[a + 2];
+        const e2x = P[c] - P[a], e2y = P[c + 1] - P[a + 1], e2z = P[c + 2] - P[a + 2];
+        const hx = dy * e2z - dz * e2y, hy = dz * e2x - dx * e2z, hz = dx * e2y - dy * e2x;
+        const det = e1x * hx + e1y * hy + e1z * hz;
+        if (Math.abs(det) < EPS) continue;
+        const inv = 1 / det;
+        const sx = ox - P[a], sy = oy - P[a + 1], sz = oz - P[a + 2];
+        const u = (sx * hx + sy * hy + sz * hz) * inv;
+        if (u < -EPS || u > 1 + EPS) continue;
+        const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+        const vv = (dx * qx + dy * qy + dz * qz) * inv;
+        if (vv < -EPS || u + vv > 1 + EPS) continue;
+        const t = (e2x * qx + e2y * qy + e2z * qz) * inv;
+        if (t > EPS && t < best) best = t;
+      }
+    }
+    return best;
+  }
+
   // Build a capped watertight solid from leaf sub-triangle indices (indices into
   // the mesh's buildSubGraph enumeration).
   // Returns { positions:Float32Array, indices:Uint32Array, triState:Int32Array, state }.
@@ -401,5 +434,5 @@
     return { objectsModel, rootModel, modelSettings };
   }
 
-  global.Split = { _inwardNormals: inwardNormals, solidFromSubs, remainderSolid, majorityBorderColor, buildSplitXML, uuid, layoutParts };
+  global.Split = { _inwardNormals: inwardNormals, _farWallDepth: farWallDepth, solidFromSubs, remainderSolid, majorityBorderColor, buildSplitXML, uuid, layoutParts };
 })(window);
