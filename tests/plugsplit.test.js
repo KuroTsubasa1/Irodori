@@ -96,9 +96,15 @@ test("remainder shares the socket -> part+remainder both watertight at depth", (
   for (const [, n] of edgeUseCounts(rem.indices)) assert.equal(n, 2, "remainder closed");
   assert.equal(directedViolations(rem.indices), 0, "remainder winding");
   assert.ok(signedVolume(rem.indices, rem.positions) > 0, "remainder outward");
-  // the remainder's socket copy reaches the same depth as the part's
-  let pMin = Infinity, rMin = Infinity;
+  // the part's plug reaches the socket depth (top z=2, depth 1 -> bottom z=1)
+  let pMin = Infinity;
   for (let i = 0; i < part.positions.length; i += 3) pMin = Math.min(pMin, part.positions[i + 2]);
-  for (let i = 0; i < rem.positions.length; i += 3) rMin = Math.min(rMin, rem.positions[i + 2]);
-  assert.ok(Math.abs(pMin - rMin) < 1e-6, "part and remainder reach the same depth");
+  assert.ok(Math.abs(pMin - 1) < 1e-6, "part plug bottom at socket depth, got " + pMin);
+  // coincidence: the remainder carries the SAME socket, so it contains a
+  // vertex at that exact depth (its global min is the cube's far wall at z=0,
+  // which is expected and not what we're checking here).
+  let remHasSocket = false;
+  for (let i = 0; i < rem.positions.length; i += 3)
+    if (Math.abs(rem.positions[i + 2] - 1) < 1e-6) { remHasSocket = true; break; }
+  assert.ok(remHasSocket, "remainder carries the shared socket at the same depth");
 });
