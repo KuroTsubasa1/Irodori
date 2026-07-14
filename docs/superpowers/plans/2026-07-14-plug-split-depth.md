@@ -16,7 +16,7 @@
 - Watertight in tests = every undirected edge used exactly twice (winding-blind). Winding is validated separately via `directedViolations` (0) and `signedVolume` (> 0). (CLAUDE.md + `tests/harness.js`)
 - After editing `js/`, restart the static server on a NEW port or hard-reload (stale-module cache). (CLAUDE.md)
 - New geometry lives in `js/split.js` (depends on `Paint` + `Cleanup` + `Caps`, already loaded before it).
-- The correctly-oriented flat cap **opposes** the surface's rim-edge direction (closed-solid invariant enforced by `orientCapComponents`). The socket relies on this: walls take each rim edge opposite the surface; the bottom is the oriented flat cap reversed. Do not run `orientCapComponents` on the socket — it is built already-correct.
+- The correctly-oriented flat cap **opposes** the surface's rim-edge direction (closed-solid invariant enforced by `orientCapComponents`). The socket relies on this: walls take each rim edge opposite the surface; the bottom is the oriented flat cap re-based onto the offset points with **no further reversal** (the walls emit the offset-ring edge in the surface direction, so the already-opposed flat cap closes it correctly as-is — reversing it again would double-use the edge in the same direction). Do not run `orientCapComponents` on the socket — it is built already-correct.
 
 ---
 
@@ -215,7 +215,7 @@ git commit -m "feat: far-wall raycast depth helper for plug split"
 
 ## Task 3: Socket builder wired into `solidFromSubs`
 
-Build the socket (offset points + walls + reversed-bottom) and make `solidFromSubs` accept `opts = { depth, wallMode }`. `depth = 0` (or missing `opts`) keeps today's flat cap exactly. Depth is clamped per part to `0.9 × farWallDepth`.
+Build the socket (offset points + walls + re-based bottom) and make `solidFromSubs` accept `opts = { depth, wallMode }`. `depth = 0` (or missing `opts`) keeps today's flat cap exactly. Depth is clamped per part to `0.9 × farWallDepth`.
 
 **Files:**
 - Modify: `js/split.js` (`solidFromSubs` signature + branch; add `buildSocket`)
@@ -282,10 +282,12 @@ In `js/split.js`, add `buildSocket` (after `orientCapComponents`):
 
 ```js
   // Turn the oriented flat cap into a "socket": inward-offset points + wall
-  // quads + the flat cap reversed & offset (the bottom). verts = the rim vids
+  // quads + the flat cap re-based & offset (the bottom). verts = the rim vids
   // (indices 0..V-1); extraPts[0..V-1] = the offset of each rim vertex; then the
   // bottom's interior extras. Built already-correct (walls take each rim edge
-  // OPPOSITE the surface; bottom = oriented flat cap reversed), so the caller
+  // OPPOSITE the surface; bottom = oriented flat cap re-based, NOT reversed —
+  // walls already emit the offset-ring edge in surface direction, so the
+  // already-opposed flat cap closes it as-is), so the caller
   // must NOT run orientCapComponents on it. Returns null if depth clamps to ~0.
   function buildSocket(mesh, g, flat, subs, surfDirEdges, opts) {
     const { vx, vy, vz } = g;
@@ -316,12 +318,12 @@ In `js/split.js`, add `buildSocket` (after `orientCapComponents`):
       tris.push([v, u, offRef(u)]);
       tris.push([v, offRef(u), offRef(v)]);
     }
-    // bottom: the oriented flat cap, reversed, rim refs -> offset refs, interior
+    // bottom: the oriented flat cap re-based (NO extra reversal), rim refs -> offset refs, interior
     // extras offset along the averaged inward normal.
     const botExtraBase = V + extraPts.length;
     for (const ep of flat.extraPts) extraPts.push([ep[0] + avg[0] * eff, ep[1] + avg[1] * eff, ep[2] + avg[2] * eff]);
     const botRef = (i) => (i < V ? offRef(i) : botExtraBase + (i - V));
-    for (const [a, b, c] of flat.tris) tris.push([botRef(a), botRef(c), botRef(b)]); // reversed
+    for (const [a, b, c] of flat.tris) tris.push([botRef(a), botRef(b), botRef(c)]); // re-based, not reversed
 
     return { verts, extraPts, tris, method: opts.method };
   }
