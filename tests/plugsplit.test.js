@@ -45,3 +45,41 @@ test("farWallDepth: cube top -> bottom distance is 2; miss -> Infinity", () => {
   const miss = Split._farWallDepth(mesh, [[1, 1, 2]], [[0, 0, 1]]);
   assert.equal(miss, Infinity);
 });
+
+test("solidFromSubs: depth 0 is identical to the flat cap", () => {
+  const { Cleanup, Split } = loadModules();
+  const base = () => { const m = makeToppedCube(); return { m, subs: regionOfState(Cleanup, m, 2) }; };
+  const A = base(), B = base();
+  const flat = Split.solidFromSubs(A.m, A.subs, "centroid");
+  const zero = Split.solidFromSubs(B.m, B.subs, "centroid", { depth: 0, wallMode: "averaged" });
+  assert.deepEqual(Array.from(zero.indices), Array.from(flat.indices));
+  assert.deepEqual(Array.from(zero.positions), Array.from(flat.positions));
+  assert.equal(zero.cap.tris.length, flat.cap.tris.length);
+});
+
+test("solidFromSubs: depth>0 plug is watertight, outward-wound, deeper", () => {
+  const { Cleanup, Split } = loadModules();
+  for (const wallMode of ["averaged", "pervertex"]) {
+    const mesh = makeToppedCube();
+    const subs = regionOfState(Cleanup, mesh, 2);
+    const solid = Split.solidFromSubs(mesh, subs, "centroid", { depth: 1, wallMode });
+    for (const [, n] of edgeUseCounts(solid.indices)) assert.equal(n, 2, "closed " + wallMode);
+    assert.equal(directedViolations(solid.indices), 0, "consistent winding " + wallMode);
+    assert.ok(signedVolume(solid.indices, solid.positions) > 0, "outward " + wallMode);
+    // the socket pushed points below z=2 (into the body)
+    let minZ = Infinity;
+    for (let i = 0; i < solid.positions.length; i += 3) minZ = Math.min(minZ, solid.positions[i + 2]);
+    assert.ok(minZ < 2 - 1e-6 && minZ >= 0, "plug goes into body, got minZ=" + minZ);
+  }
+});
+
+test("solidFromSubs: depth is clamped below the far wall", () => {
+  const { Cleanup, Split } = loadModules();
+  const mesh = makeToppedCube(); // thickness 2 in z
+  const subs = regionOfState(Cleanup, mesh, 2);
+  const solid = Split.solidFromSubs(mesh, subs, "centroid", { depth: 100, wallMode: "averaged" });
+  let minZ = Infinity;
+  for (let i = 0; i < solid.positions.length; i += 3) minZ = Math.min(minZ, solid.positions[i + 2]);
+  // clamped to 0.9 * 2 = 1.8 -> bottom at z = 2 - 1.8 = 0.2, never crosses z=0
+  assert.ok(minZ > 0.1 && minZ < 0.3, "clamped near 0.2, got " + minZ);
+});

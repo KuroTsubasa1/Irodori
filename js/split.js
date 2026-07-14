@@ -62,8 +62,9 @@
   // Build a capped watertight solid from leaf sub-triangle indices (indices into
   // the mesh's buildSubGraph enumeration).
   // Returns { positions:Float32Array, indices:Uint32Array, triState:Int32Array, state }.
-  function solidFromSubs(mesh, subs, method) {
+  function solidFromSubs(mesh, subs, method, opts) {
     method = method || "centroid";
+    opts = opts || {};
     const g = Cleanup.buildSubGraph(mesh);
     const { sv, vx, vy, vz, subLeaf, midOf } = g;
 
@@ -174,6 +175,22 @@
       const surfDir = new Map();
       for (const e of bEdge.values()) if (e.count === 1) surfDir.set(ekeyG(e.u, e.v), e.u + ">" + e.v);
       orientCapComponents(cap, surfDir);
+      // Deepen the flat cap into a socket when a depth is requested. The socket
+      // is built already-correctly-wound, so it does NOT go through
+      // orientCapComponents. surfDirEdges are rim edges as indices into
+      // cap.verts, in the surface's first-seen direction.
+      if (opts.depth > 0) {
+        const vidToIdx = new Map();
+        cap.verts.forEach((gid, i) => vidToIdx.set(gid, i));
+        const surfDirEdges = [];
+        for (const e of bEdge.values()) {
+          if (e.count !== 1) continue;
+          const u = vidToIdx.get(e.u), v = vidToIdx.get(e.v);
+          if (u !== undefined && v !== undefined) surfDirEdges.push({ u, v });
+        }
+        const socket = buildSocket(mesh, g, cap, subs, surfDirEdges, { ...opts, method });
+        if (socket) cap = socket;
+      }
       // emit the cap into the part: loop verts weld via lid(); extras append locally
       const capLocal = cap.verts.map((gid) => lid(gid));
       const extraBase = px.length;
@@ -235,6 +252,54 @@
       else if (a === o && a > 0) console.warn("solidFromSubs: ambiguous cap orientation; leaving component as-is");
     }
     if (flip.size) cap.tris.forEach((t, ti) => { if (flip.has(find(ti))) { const tmp = t[1]; t[1] = t[2]; t[2] = tmp; } });
+  }
+
+  // Turn the oriented flat cap into a "socket": inward-offset points + wall
+  // quads + the flat cap re-based onto the offset points (the bottom). verts =
+  // the rim vids (indices 0..V-1); extraPts[0..V-1] = the offset of each rim
+  // vertex; then the bottom's interior extras. Built already-correct (walls
+  // take each rim edge OPPOSITE the surface, same as the original flat cap
+  // did; the bottom keeps the flat cap's own winding, just remapped onto the
+  // offset points, so its edges run opposite the walls' offset-ring edges), so
+  // the caller must NOT run orientCapComponents on it. Returns null if depth
+  // clamps to ~0.
+  function buildSocket(mesh, g, flat, subs, surfDirEdges, opts) {
+    const { vx, vy, vz } = g;
+    const wallMode = opts.wallMode === "pervertex" ? "pervertex" : "averaged";
+    const { perVid, avg } = inwardNormals(g, subs);
+    const dirOf = (vid) => (wallMode === "pervertex" ? (perVid.get(vid) || avg) : avg);
+
+    const rimVids = flat.verts;      // rim vids; index i is also the socket ref for the top
+    const V = rimVids.length;
+    const origins = rimVids.map((vid) => [vx[vid], vy[vid], vz[vid]]);
+    const dirs = rimVids.map((vid) => dirOf(vid));
+    const farWall = farWallDepth(mesh, origins, dirs);
+    const req = opts.depth || 0;
+    const eff = Number.isFinite(farWall) ? Math.min(req, 0.9 * farWall) : req;
+    if (!(eff > 1e-9)) return null;
+
+    const verts = rimVids.slice();
+    const extraPts = [];
+    rimVids.forEach((vid, i) => {
+      const d = dirOf(vid);
+      extraPts.push([vx[vid] + d[0] * eff, vy[vid] + d[1] * eff, vz[vid] + d[2] * eff]);
+    });
+    const offRef = (i) => V + i;     // rim index i -> its offset point ref
+
+    const tris = [];
+    // walls: each rim edge, surface direction u->v, top edge taken v->u (opposite)
+    for (const { u, v } of surfDirEdges) {
+      tris.push([v, u, offRef(u)]);
+      tris.push([v, offRef(u), offRef(v)]);
+    }
+    // bottom: the oriented flat cap's own winding, rim refs -> offset refs,
+    // interior extras offset along the averaged inward normal.
+    const botExtraBase = V + extraPts.length;
+    for (const ep of flat.extraPts) extraPts.push([ep[0] + avg[0] * eff, ep[1] + avg[1] * eff, ep[2] + avg[2] * eff]);
+    const botRef = (i) => (i < V ? offRef(i) : botExtraBase + (i - V));
+    for (const [a, b, c] of flat.tris) tris.push([botRef(a), botRef(b), botRef(c)]);
+
+    return { verts, extraPts, tris, method: opts.method };
   }
 
   // Build the remaining mesh (sub-triangles NOT in any part) as a watertight
