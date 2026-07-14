@@ -48,7 +48,7 @@
   function snap() {
     return {
       meshes: doc.meshes.map((m) => ({ paints: m.paints.slice(), dom: Int32Array.from(m.dom) })),
-      splits: splitParts.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method })),
+      splits: splitParts.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method, depth: p.depth || 0, wallMode: p.wallMode || "averaged" })),
       filaments: doc.filaments.map((f) => ({ index: f.index, hex: f.hex })),
       meshList: doc.meshes.slice(),
       synthetic: !!doc.synthetic,
@@ -63,7 +63,7 @@
       Cleanup.invalidateSub(m);
     });
     if (state.filaments) doc.filaments = state.filaments.map((f) => ({ index: f.index, hex: f.hex }));
-    splitParts = state.splits.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method }));
+    splitParts = state.splits.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method, depth: p.depth || 0, wallMode: p.wallMode || "averaged" }));
   }
   const current = () => history[histIndex].state;
   function pushHistory(label, stateClone) {
@@ -650,7 +650,10 @@
     if (hit.localSub == null) return;
     const subs = Cleanup.selectColorRegion(m, hit.localSub, claimedByMesh()[hit.meshIndex]);
     if (!subs.length) { toast("Nothing to split there", true); return; }
-    splitParts.push({ id: splitSeq++, meshIndex: hit.meshIndex, subs, state: hit.state, method: $("capMethod").value });
+    splitParts.push({ id: splitSeq++, meshIndex: hit.meshIndex, subs, state: hit.state,
+      method: $("capMethod").value,
+      depth: +$("splitDepth").value || 0,
+      wallMode: $("splitWallMode").value });
     pushHistory("Split");
     render(null);
     buildObjects();
@@ -953,6 +956,27 @@
     pushHistory("Cap method: " + method);
     render(null);
     toast("Re-capped " + splitParts.length + " part(s) with " + method);
+  });
+  $("splitDepth").addEventListener("input", () => {
+    $("splitDepthVal").textContent = $("splitDepth").value;
+    if (!doc || !splitParts.length) return;
+    const depth = +$("splitDepth").value || 0;
+    for (const p of splitParts) p.depth = depth;
+    render(null);
+    buildObjects();
+  });
+  $("splitDepth").addEventListener("change", () => {
+    if (!doc || !splitParts.length) return;
+    pushHistory("Split depth: " + $("splitDepth").value);
+  });
+  $("splitWallMode").addEventListener("change", () => {
+    if (!doc || !splitParts.length) return;
+    const wallMode = $("splitWallMode").value;
+    for (const p of splitParts) p.wallMode = wallMode;
+    pushHistory("Split walls: " + wallMode);
+    render(null);
+    buildObjects();
+    toast("Rebuilt " + splitParts.length + " part(s): " + wallMode + " walls");
   });
   $("reframeBtn").addEventListener("click", () => Viewer.frame());
   $("bgToggle").addEventListener("click", () => $("stage").classList.toggle("dark"));

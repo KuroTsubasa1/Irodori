@@ -117,7 +117,14 @@
             <option value="projected">Projected normal</option>
             <option value="centroid">Centroid</option>
           </select>
-          <span class="muted">Click a colored part to lift it out as its own solid.</span>
+          <span class="optlabel">Depth <span id="splitDepthVal" class="muted">0</span></span>
+          <input type="range" id="splitDepth" min="0" max="20" step="0.5" value="0" />
+          <span class="optlabel">Walls</span>
+          <select id="splitWallMode">
+            <option value="averaged" selected>Averaged (prism)</option>
+            <option value="pervertex">Per-vertex (follow shape)</option>
+          </select>
+          <span class="muted">Click a colored part to lift it out as its own solid. Depth extends the cut into the body (auto-clamped so it can't poke through).</span>
         </div>
 
         <div class="opt" data-panel="cut" hidden>
