@@ -3,6 +3,29 @@
 (function (global) {
   "use strict";
 
+  // Unit inward normals for a region: per welded rim vertex + one averaged.
+  // A sub's (v0,v1,v2) cross points outward (mesh is CCW-outward); we negate.
+  function inwardNormals(g, subs) {
+    const { sv, vx, vy, vz } = g;
+    const acc = new Map(); // vid -> [nx,ny,nz] (area-weighted outward)
+    let ax = 0, ay = 0, az = 0;
+    for (const s of subs) {
+      const a = sv[s * 3], b = sv[s * 3 + 1], c = sv[s * 3 + 2];
+      const ux = vx[b] - vx[a], uy = vy[b] - vy[a], uz = vz[b] - vz[a];
+      const wx = vx[c] - vx[a], wy = vy[c] - vy[a], wz = vz[c] - vz[a];
+      const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx;
+      ax += nx; ay += ny; az += nz;
+      for (const vid of [a, b, c]) {
+        const e = acc.get(vid) || [0, 0, 0];
+        e[0] += nx; e[1] += ny; e[2] += nz; acc.set(vid, e);
+      }
+    }
+    const unitIn = (x, y, z) => { const L = Math.hypot(x, y, z) || 1; return [-x / L, -y / L, -z / L]; };
+    const perVid = new Map();
+    for (const [vid, e] of acc) perVid.set(vid, unitIn(e[0], e[1], e[2]));
+    return { perVid, avg: unitIn(ax, ay, az) };
+  }
+
   // Build a capped watertight solid from leaf sub-triangle indices (indices into
   // the mesh's buildSubGraph enumeration).
   // Returns { positions:Float32Array, indices:Uint32Array, triState:Int32Array, state }.
@@ -378,5 +401,5 @@
     return { objectsModel, rootModel, modelSettings };
   }
 
-  global.Split = { solidFromSubs, remainderSolid, majorityBorderColor, buildSplitXML, uuid, layoutParts };
+  global.Split = { _inwardNormals: inwardNormals, solidFromSubs, remainderSolid, majorityBorderColor, buildSplitXML, uuid, layoutParts };
 })(window);
