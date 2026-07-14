@@ -419,7 +419,7 @@
     cutPlaneObj.visible = true;
   }
 
-  // parts: [{ meshIndex, subs, state }]
+  // parts: [{ id, meshIndex, subs, state, method, depth, wallMode }]
   function setSplitParts(parts) {
     const prevById = new Map();
     for (const o of splitObjs) if (o.id != null) prevById.set(o.id, o.cur);

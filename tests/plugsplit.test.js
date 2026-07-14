@@ -14,6 +14,17 @@ function makeToppedCube() {
   return m;
 }
 
+// The top face (z=2) plus one side face (y=0) painted state 2 — a region whose
+// rim WRAPS over a cube edge, so it is non-planar and its per-vertex inward
+// normals genuinely differ from the single averaged normal (unlike the flat
+// top of makeToppedCube, where the two modes coincide).
+function makeEdgeWrapCube() {
+  const m = makeClosedCube();
+  m.paints = m.paints.slice();
+  for (const f of [2, 3, 4, 5]) m.paints[f] = "8"; // top pair + y=0 side pair
+  return m;
+}
+
 function regionOfState(Cleanup, mesh, state) {
   const g = Cleanup.buildSubGraph(mesh);
   const seed = [...Array(g.NS).keys()].find((i) => g.subLeaf[i].state === state);
@@ -107,4 +118,30 @@ test("remainder shares the socket -> part+remainder both watertight at depth", (
   for (let i = 0; i < rem.positions.length; i += 3)
     if (Math.abs(rem.positions[i + 2] - 1) < 1e-6) { remHasSocket = true; break; }
   assert.ok(remHasSocket, "remainder carries the shared socket at the same depth");
+});
+
+test("per-vertex vs averaged: distinct, watertight sockets on a non-planar rim", () => {
+  const { Cleanup, Split } = loadModules();
+  // makeEdgeWrapCube's region wraps over a cube edge, so per-vertex inward
+  // normals differ from the averaged one (unlike the flat topped-cube, where
+  // depth>0 exercises the wallMode branch but yields identical geometry).
+  const build = (wallMode) => {
+    const mesh = makeEdgeWrapCube();
+    const subs = regionOfState(Cleanup, mesh, 2);
+    return Split.solidFromSubs(mesh, subs, "centroid", { depth: 0.4, wallMode });
+  };
+  const avg = build("averaged");
+  const pv = build("pervertex");
+  // both are valid closed solids (winding-blind + winding-checked)
+  for (const [, n] of edgeUseCounts(avg.indices)) assert.equal(n, 2, "averaged closed");
+  for (const [, n] of edgeUseCounts(pv.indices)) assert.equal(n, 2, "pervertex closed");
+  assert.equal(directedViolations(avg.indices), 0, "averaged winding");
+  assert.equal(directedViolations(pv.indices), 0, "pervertex winding");
+  assert.ok(signedVolume(avg.indices, avg.positions) > 0, "averaged outward");
+  assert.ok(signedVolume(pv.indices, pv.positions) > 0, "pervertex outward");
+  // the two modes must actually produce DIFFERENT geometry here — otherwise the
+  // per-vertex offset path is not really being exercised.
+  const differ = avg.positions.length !== pv.positions.length ||
+    [...avg.positions].some((v, i) => Math.abs(v - pv.positions[i]) > 1e-9);
+  assert.ok(differ, "per-vertex and averaged sockets differ on a curved rim");
 });
