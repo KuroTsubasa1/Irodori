@@ -83,3 +83,22 @@ test("solidFromSubs: depth is clamped below the far wall", () => {
   // clamped to 0.9 * 2 = 1.8 -> bottom at z = 2 - 1.8 = 0.2, never crosses z=0
   assert.ok(minZ > 0.1 && minZ < 0.3, "clamped near 0.2, got " + minZ);
 });
+
+test("remainder shares the socket -> part+remainder both watertight at depth", () => {
+  const { Cleanup, Split } = loadModules();
+  const mesh = makeToppedCube();
+  const subs = regionOfState(Cleanup, mesh, 2);
+  const opts = { depth: 1, wallMode: "averaged" };
+  const part = Split.solidFromSubs(mesh, subs, "centroid", opts);
+  const claimed = new Set(subs);
+  const rem = Split.remainderSolid(mesh, [{ subs, cap: part.cap, state: 2 }], claimed);
+  for (const [, n] of edgeUseCounts(part.indices)) assert.equal(n, 2, "part closed");
+  for (const [, n] of edgeUseCounts(rem.indices)) assert.equal(n, 2, "remainder closed");
+  assert.equal(directedViolations(rem.indices), 0, "remainder winding");
+  assert.ok(signedVolume(rem.indices, rem.positions) > 0, "remainder outward");
+  // the remainder's socket copy reaches the same depth as the part's
+  let pMin = Infinity, rMin = Infinity;
+  for (let i = 0; i < part.positions.length; i += 3) pMin = Math.min(pMin, part.positions[i + 2]);
+  for (let i = 0; i < rem.positions.length; i += 3) rMin = Math.min(rMin, rem.positions[i + 2]);
+  assert.ok(Math.abs(pMin - rMin) < 1e-6, "part and remainder reach the same depth");
+});

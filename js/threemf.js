@@ -182,7 +182,7 @@
 
   // Build a split .3mf: each split part + the painted remainder become separate
   // top-level objects, coincident at the original build transform.
-  // splitParts: [{ meshIndex, subs:Int32Array|number[], state, method }]
+  // splitParts: [{ meshIndex, subs:Int32Array|number[], state, method, depth, wallMode }]
   async function exportSplit(doc, splitParts) {
     const claimed = doc.meshes.map(() => new Set());
     for (const p of splitParts)
@@ -198,7 +198,8 @@
     const partCaps = [];
     for (let pi = 0; pi < splitParts.length; pi++) {
       const p = splitParts[pi];
-      const g = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "liepa");
+      const g = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "liepa",
+        { depth: p.depth || 0, wallMode: p.wallMode || "averaged" });
       partCaps[pi] = g.cap;
       objects.push({
         name: nameFor(p.state), extruder: extruderFor(p.state),
