@@ -450,7 +450,8 @@
     };
     const part = assemble(subs, false, partState);
     const remainder = assemble(rest, true, pocketState);
-    if (MeshGeo.checkClosed(part) || MeshGeo.checkClosed(remainder)) return { error: "Couldn't make a clean solid here" };
+    const bad = (m) => MeshGeo.checkClosed(m) || !(MeshGeo.signedVolume(m) > 0);
+    if (bad(part) || bad(remainder)) return { error: "Couldn't make a clean solid here (pocket-shaped or too sharp region)", info: { halvings, shell: scale === 0, faces: subs.length } };
     return { part, remainder, info: { halvings, shell: scale === 0, faces: subs.length } };
   }
   // Most common remainder state adjacent to the part's boundary (the part's subs'

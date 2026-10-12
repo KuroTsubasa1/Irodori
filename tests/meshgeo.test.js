@@ -14,6 +14,14 @@ test("checkClosed: 0 for the cube, matches directedViolations on the open tube",
   assert.strictEqual(MeshGeo.checkClosed(bad), 3);
 });
 
+test("signedVolume: outward cube is 8, a flipped face changes it", () => {
+  const { MeshGeo } = loadModules();
+  const cube = makeClosedCube();
+  assert.ok(Math.abs(MeshGeo.signedVolume(cube) - 8) < 1e-9);
+  const bad = makeClosedCube(); const t = bad.v2[2]; bad.v2[2] = bad.v3[2]; bad.v3[2] = t; // face off the origin plane
+  assert.ok(MeshGeo.signedVolume(bad) < 8);
+});
+
 test("triTriIntersect: crossing yes, separated no, coplanar no", () => {
   const { MeshGeo } = loadModules();
   const A = [[0, 0, 0], [2, 0, 0], [0, 2, 0]];           // z=0

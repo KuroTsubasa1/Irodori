@@ -294,4 +294,29 @@ function makeRoofPrism(w, h, len, n) {
   };
 }
 
-module.exports = { makeGridBox, makeRoofPrism, loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeClosedCube, makeBentStrip, makeBigTriangle, directedViolations, signedVolume };
+// U-channel: box [0,4]x[0,4]x[0,len] with a groove x in [1,3], y in [2,4]
+// running along z. Coarse extrusion of a 10-vertex CCW polygon (extra
+// vertices at (4,2) and (0,2) so the end caps need no T-junctions).
+// Outward-wound. mesh.edge[f] = polygon edge index of a side quad, or -1
+// for end-cap triangles. Volume = 12*len.
+function makeUChannel(len) {
+  const poly = [[0, 0], [4, 0], [4, 2], [4, 4], [3, 4], [3, 2], [1, 2], [1, 4], [0, 4], [0, 2]];
+  const n = poly.length, pos = [];
+  for (const [x, y] of poly) pos.push(x, y, 0, x, y, len); // ids 2i (z=0), 2i+1 (z=len)
+  const v1 = [], v2 = [], v3 = [], edge = [];
+  const tri = (a, b, c, e) => { v1.push(a); v2.push(b); v3.push(c); edge.push(e); };
+  for (let i = 0; i < n; i++) { // side quads: (i0, j0, j1), (i0, j1, i1) faces outward for a CCW polygon
+    const j = (i + 1) % n, i0 = 2 * i, i1 = 2 * i + 1, j0 = 2 * j, j1 = 2 * j + 1;
+    tri(i0, j0, j1, i); tri(i0, j1, i1, i);
+  }
+  // end caps as triangles over poly indices, CCW seen from +z. The bottom slab is
+  // fanned over (0,1,2,5,6,9) so its top edge carries the groove-floor vertices
+  // (3,2),(1,2) — no T-junctions with the side quads — plus left and right lands.
+  for (const [a, b, c] of [[0, 1, 2], [0, 2, 5], [0, 5, 6], [0, 6, 9], [9, 6, 7], [9, 7, 8], [5, 2, 3], [5, 3, 4]]) {
+    tri(2 * a + 1, 2 * b + 1, 2 * c + 1, -1); // z=len, +z
+    tri(2 * a, 2 * c, 2 * b, -1);             // z=0, -z
+  }
+  return { nf: v1.length, positions: new Float32Array(pos), v1: Int32Array.from(v1), v2: Int32Array.from(v2), v3: Int32Array.from(v3), paints: v1.map(() => ""), edge };
+}
+
+module.exports = { makeUChannel, makeGridBox, makeRoofPrism, loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeClosedCube, makeBentStrip, makeBigTriangle, directedViolations, signedVolume };

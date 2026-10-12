@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { loadModules, makeGridBox, makeRoofPrism, makeBentStrip, signedVolume } = require("./harness");
+const { loadModules, makeGridBox, makeRoofPrism, makeUChannel, makeBentStrip, signedVolume } = require("./harness");
 
 const flat = (m) => { const I = []; for (let f = 0; f < m.nf; f++) I.push(m.v1[f], m.v2[f], m.v3[f]); return I; };
 const vol = (m) => signedVolume(flat(m), m.positions);
@@ -28,6 +28,9 @@ test("fixtures: grid box and roof prism are closed with the expected volume", ()
   assert.ok(Math.abs(vol(box) - 64) < 1e-6, "box volume " + vol(box));
   assert.strictEqual(MeshGeo.checkClosed(roof), 0);
   assert.ok(Math.abs(vol(roof) - 12) < 1e-6, "roof volume " + vol(roof));
+  const u = makeUChannel(4);
+  assert.strictEqual(MeshGeo.checkClosed(u), 0);
+  assert.ok(Math.abs(vol(u) - 48) < 1e-6, "u-channel volume " + vol(u));
   assert.strictEqual(box.nf, 6 * 16 * 2);
   assert.strictEqual(roof.nf, 8 * 16);
 });
@@ -156,12 +159,9 @@ test("plugSolids: cross-section rim adds no wall (part == lens)", () => {
   assert.ok(r.part.nf >= faces.length, "patch kept");
 });
 
-test("plugSolids: convex ridge forces depth halving, output still closed", () => {
+test("plugSolids: band over a convex ridge stays clean (clamp + cos weight keep walls apart)", () => {
   const { Cleanup, Split, MeshGeo } = loadModules();
   const roof = makeRoofPrism(4, 3, 2, 4);
-  // band over the ridge: the upper half of both slopes. Inward rays from the
-  // two mid-lines converge under the ridge and (at half the far-wall distance)
-  // still cross each other -> the first plug self-intersects -> halving.
   const P = roof.positions;
   for (let f = 0; f < roof.nf; f++) {
     const y = (P[roof.v1[f] * 3 + 1] + P[roof.v2[f] * 3 + 1] + P[roof.v3[f] * 3 + 1]) / 3;
@@ -169,10 +169,20 @@ test("plugSolids: convex ridge forces depth halving, output still closed", () =>
   }
   const r = Split.plugSolids(roof, regionOf(Cleanup, roof, 1), { depth: 10 });
   assert.ok(!r.error, r.error);
-  assert.ok(r.info.halvings >= 1, "halvings " + r.info.halvings);
+  assert.strictEqual(r.info.halvings, 0);
   closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
-  assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 12) < 1e-6);
   assert.ok(vol(r.part) > 0 && vol(r.remainder) > 0);
+  assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 12) < 1e-6);
+});
+
+test("plugSolids: a pocket-shaped region (groove) runs halving to the shell and is refused as inside-out", () => {
+  const { Cleanup, Split } = loadModules();
+  const m = makeUChannel(4);
+  for (let f = 0; f < m.nf; f++) if (m.edge[f] === 4 || m.edge[f] === 5 || m.edge[f] === 6) m.paints[f] = "4"; // groove walls + floor
+  const r = Split.plugSolids(m, regionOf(Cleanup, m, 1), { depth: 5 });
+  assert.match(r.error, /clean solid/);
+  assert.strictEqual(r.info.shell, true);
+  assert.strictEqual(r.info.halvings, 4);
 });
 
 test("plugSolids refuses pinch, whole-mesh and empty regions", () => {

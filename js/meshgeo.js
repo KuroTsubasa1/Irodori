@@ -179,5 +179,17 @@
     return best;
   }
 
-  global.MeshGeo = { meshBounds, checkClosed, triTriIntersect, faceGrid, rayHit };
+  // Signed volume of a closed mesh (positive when outward-wound).
+  function signedVolume(mesh) {
+    const P = mesh.positions; let v6 = 0;
+    for (let f = 0; f < mesh.nf; f++) {
+      const a = mesh.v1[f] * 3, b = mesh.v2[f] * 3, c = mesh.v3[f] * 3;
+      v6 += P[a] * (P[b + 1] * P[c + 2] - P[b + 2] * P[c + 1])
+          - P[a + 1] * (P[b] * P[c + 2] - P[b + 2] * P[c])
+          + P[a + 2] * (P[b] * P[c + 1] - P[b + 1] * P[c]);
+    }
+    return v6 / 6;
+  }
+
+  global.MeshGeo = { meshBounds, checkClosed, signedVolume, triTriIntersect, faceGrid, rayHit };
 })(window);
