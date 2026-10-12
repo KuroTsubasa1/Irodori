@@ -135,6 +135,26 @@
     };
   }
 
+  // Tilt a unit axis n: rotate by ta (radians) about u, then by tb about the
+  // fixed w = n × u (right-handed, Rodrigues). With n = e_k, u = e_(k+1) this
+  // is exactly the Cut tool's axis + two-tilt convention. Returns [x,y,z].
+  function tiltAxis(n, u, ta, tb) {
+    const w = [n[1] * u[2] - n[2] * u[1], n[2] * u[0] - n[0] * u[2], n[0] * u[1] - n[1] * u[0]];
+    const rotate = (v, k, ang) => {
+      const c = Math.cos(ang), s = Math.sin(ang);
+      const d = k[0] * v[0] + k[1] * v[1] + k[2] * v[2];
+      const cx = k[1] * v[2] - k[2] * v[1], cy = k[2] * v[0] - k[0] * v[2], cz = k[0] * v[1] - k[1] * v[0];
+      return [
+        v[0] * c + cx * s + k[0] * d * (1 - c),
+        v[1] * c + cy * s + k[1] * d * (1 - c),
+        v[2] * c + cz * s + k[2] * d * (1 - c),
+      ];
+    };
+    const v = rotate(rotate(n, u, ta), w, tb);
+    const L = Math.hypot(v[0], v[1], v[2]) || 1;
+    return [v[0] / L, v[1] / L, v[2] / L];
+  }
+
   // Band of connected sub-triangles within +/- half along an arbitrary axis.
   function selectBandAxis(mesh, seedSub, half, ax, ay, az) {
     const g = Cleanup.buildSubGraph(mesh);
@@ -303,6 +323,7 @@
     selectSmartFaces,
     facesToSubs,
     featureAxis,
+    tiltAxis,
     mirrorMap,
     axisCenters,
     mirrorStamps,

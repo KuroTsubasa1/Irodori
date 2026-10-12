@@ -678,11 +678,10 @@
     const lo = modelBBox.lo, hi = modelBBox.hi;
     const p = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
     p[axis] = lo[axis] + t * (hi[axis] - lo[axis]);
-    const n = [0, 0, 0];
-    n[axis] = 1;
-    const rot = (v, ax2, ang) => { const i = (ax2 + 1) % 3, j = (ax2 + 2) % 3; const vi = v[i], vj = v[j]; v[i] = vi * Math.cos(ang) - vj * Math.sin(ang); v[j] = vi * Math.sin(ang) + vj * Math.cos(ang); };
-    rot(n, (axis + 1) % 3, ta);
-    rot(n, (axis + 2) % 3, tb);
+    const base = [0, 0, 0], u = [0, 0, 0];
+    base[axis] = 1;
+    u[(axis + 1) % 3] = 1;
+    const n = Cleanup.tiltAxis(base, u, ta, tb);
     return { px: p[0], py: p[1], pz: p[2], nx: n[0], ny: n[1], nz: n[2] };
   }
   function updateCutPlane() { if (!doc || activeTool !== "cut") return; Viewer.setCutPlane(cutPlane()); }
