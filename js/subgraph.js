@@ -30,6 +30,8 @@
     mesh._mirror = null;
     mesh._axisCenters = null;
     mesh._faceG = null;
+    mesh._bbox = null;
+    mesh._grid = null;
   }
 
   // Build (or return cached) the sub-triangle adjacency graph for a mesh.
