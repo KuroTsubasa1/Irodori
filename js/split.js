@@ -181,6 +181,75 @@
     if (flip.size) cap.tris.forEach((t, ti) => { if (flip.has(find(ti))) { const tmp = t[1]; t[1] = t[2]; t[2] = tmp; } });
   }
 
+  const ekey = (a, b) => (a < b ? a + "_" + b : b + "_" + a);
+
+  // Conformed boundary of a sub-triangle set: surface-directed rim loops (gids
+  // from the welded sub graph), the surface direction of every rim edge, and a
+  // pinch flag (a rim vertex with != 2 rim edges — the region touches itself).
+  function patchBoundary(mesh, subs, g) {
+    const { sv, midOf } = g;
+    const decompose = (u, v) => {
+      const m = midOf ? midOf(u, v) : -1;
+      return (m >= 0 && m !== u && m !== v) ? decompose(u, m).concat(decompose(m, v).slice(1)) : [u, v];
+    };
+    const edges = new Map(); // key -> { u, v, count }
+    for (let k = 0; k < subs.length; k++) {
+      const s = subs[k];
+      const a = sv[s * 3], b = sv[s * 3 + 1], c = sv[s * 3 + 2];
+      const poly = decompose(a, b).concat(decompose(b, c).slice(1), decompose(c, a).slice(1, -1));
+      for (let i = 0; i < poly.length; i++) {
+        const u = poly[i], v = poly[(i + 1) % poly.length], key = ekey(u, v);
+        const e = edges.get(key);
+        if (e) e.count++; else edges.set(key, { u, v, count: 1 });
+      }
+    }
+    const directed = [], surfDir = new Map(), deg = new Map();
+    for (const [key, e] of edges) {
+      if (e.count !== 1) continue;
+      directed.push([e.u, e.v]);
+      surfDir.set(key, e.u + ">" + e.v);
+      deg.set(e.u, (deg.get(e.u) || 0) + 1); deg.set(e.v, (deg.get(e.v) || 0) + 1);
+    }
+    let pinch = false;
+    for (const d of deg.values()) if (d !== 2) { pinch = true; break; }
+    const loops = pinch ? [] : Caps.extractLoops(directed);
+    return { loops, surfDir, pinch };
+  }
+
+  // Inward direction and depth for every rim vertex. dir = −(smoothed model
+  // normal); t = min(depth, 0.5·t_hit) · |cos θ| (θ: normal vs the loop's
+  // best-fit plane normal) — see the spec's "Per-rim-vertex depth".
+  function rimFrame(mesh, g, loops, depth, grid) {
+    const { sv, vx, vy, vz, NS } = g;
+    const rim = new Set(); for (const L of loops) for (const gid of L) rim.add(gid);
+    const acc = new Map(); for (const gid of rim) acc.set(gid, [0, 0, 0]);
+    for (let s = 0; s < NS; s++) {
+      const a = sv[s * 3], b = sv[s * 3 + 1], c = sv[s * 3 + 2];
+      if (!rim.has(a) && !rim.has(b) && !rim.has(c)) continue;
+      const ux = vx[b] - vx[a], uy = vy[b] - vy[a], uz = vz[b] - vz[a];
+      const wx = vx[c] - vx[a], wy = vy[c] - vy[a], wz = vz[c] - vz[a];
+      const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx; // area-weighted
+      for (const gid of [a, b, c]) { const t = acc.get(gid); if (t) { t[0] += nx; t[1] += ny; t[2] += nz; } }
+    }
+    const unit = (v) => { const L = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / L, v[1] / L, v[2] / L]; };
+    const dir = new Map(), t = new Map();
+    const diag = MeshGeo.meshBounds(mesh).diag;
+    for (const L of loops) {
+      let N = L.map((gid) => unit(acc.get(gid)));
+      for (let pass = 0; pass < 2; pass++) // two 1-ring smoothing passes along the loop
+        N = N.map((n, i) => { const p = N[(i + L.length - 1) % L.length], q = N[(i + 1) % L.length]; return unit([p[0] + n[0] + q[0], p[1] + n[1] + q[1], p[2] + n[2] + q[2]]); });
+      const pl = Caps.bestFitPlane(L.map((gid) => [vx[gid], vy[gid], vz[gid]]));
+      L.forEach((gid, i) => {
+        const n = N[i], d = [-n[0], -n[1], -n[2]];
+        const w = Math.abs(n[0] * pl.nx + n[1] * pl.ny + n[2] * pl.nz);
+        const hit = MeshGeo.rayHit(mesh, grid, vx[gid], vy[gid], vz[gid], d[0], d[1], d[2], 1e-4 * diag, true);
+        dir.set(gid, d);
+        t.set(gid, Math.min(depth, 0.5 * hit) * w);
+      });
+    }
+    return { dir, t };
+  }
+
   // Build the remaining mesh (sub-triangles NOT in any part) as a watertight
   // solid: its conformed surface + every part's cap, reversed, each coloured the
   // loop's majority bordering color. parts: [{ subs, cap, state }]; claimed: Set.
@@ -378,5 +447,5 @@
     return { objectsModel, rootModel, modelSettings };
   }
 
-  global.Split = { solidFromSubs, remainderSolid, majorityBorderColor, buildSplitXML, uuid, layoutParts };
+  global.Split = { solidFromSubs, remainderSolid, patchBoundary, rimFrame, majorityBorderColor, buildSplitXML, uuid, layoutParts };
 })(window);

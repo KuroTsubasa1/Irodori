@@ -216,4 +216,82 @@ function signedVolume(indices, positions) {
   return v6 / 6;
 }
 
-module.exports = { loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeClosedCube, makeBentStrip, makeBigTriangle, directedViolations, signedVolume };
+// Closed box [0,sx]x[0,sy]x[0,sz] with every side an n x n grid of quads
+// (2 tris each), vertices welded by coordinate so edges match across sides.
+// Outward-wound. mesh.side[f] names the side of face f. Volume = sx*sy*sz.
+function makeGridBox(n, sx, sy, sz) {
+  const pos = [], key = new Map(), v1 = [], v2 = [], v3 = [], side = [];
+  const vid = (x, y, z) => {
+    const k = x.toFixed(9) + "," + y.toFixed(9) + "," + z.toFixed(9);
+    let i = key.get(k);
+    if (i === undefined) { i = pos.length / 3; key.set(k, i); pos.push(x, y, z); }
+    return i;
+  };
+  // [name, origin, U, V] with U x V pointing OUTWARD
+  const sides = [
+    ["top",    [0, 0, sz], [sx, 0, 0], [0, sy, 0]],
+    ["bottom", [0, 0, 0],  [0, sy, 0], [sx, 0, 0]],
+    ["front",  [0, 0, 0],  [sx, 0, 0], [0, 0, sz]],
+    ["back",   [0, sy, 0], [0, 0, sz], [sx, 0, 0]],
+    ["left",   [0, 0, 0],  [0, 0, sz], [0, sy, 0]],
+    ["right",  [sx, 0, 0], [0, sy, 0], [0, 0, sz]],
+  ];
+  for (const [name, O, U, V] of sides) {
+    const P = (i, j) => vid(O[0] + U[0] * i / n + V[0] * j / n, O[1] + U[1] * i / n + V[1] * j / n, O[2] + U[2] * i / n + V[2] * j / n);
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      const a = P(i, j), b = P(i + 1, j), c = P(i + 1, j + 1), d = P(i, j + 1);
+      v1.push(a, a); v2.push(b, c); v3.push(c, d); side.push(name, name);
+    }
+  }
+  return {
+    nf: v1.length, positions: new Float32Array(pos),
+    v1: Int32Array.from(v1), v2: Int32Array.from(v2), v3: Int32Array.from(v3),
+    paints: v1.map(() => ""), side,
+  };
+}
+
+// Gridded triangular prism ("roof"): cross-section (0,0),(w,0),(w/2,h) in XY,
+// extruded along z in [0,len]. Every face is subdivided n ways (slopes and
+// base n x n quads, ends n^2 triangles), vertices welded by coordinate so the
+// grids match across edges. Outward-wound. mesh.side[f] in
+// "left"|"right"|"base"|"end0"|"end1". Volume = w*h*len/2. nf = 8*n*n.
+function makeRoofPrism(w, h, len, n) {
+  const pos = [], key = new Map(), v1 = [], v2 = [], v3 = [], side = [];
+  const vid = (x, y, z) => {
+    const k = x.toFixed(9) + "," + y.toFixed(9) + "," + z.toFixed(9);
+    let i = key.get(k);
+    if (i === undefined) { i = pos.length / 3; key.set(k, i); pos.push(x, y, z); }
+    return i;
+  };
+  const at = (O, U, V, i, j) => vid(O[0] + U[0] * i / n + V[0] * j / n, O[1] + U[1] * i / n + V[1] * j / n, O[2] + U[2] * i / n + V[2] * j / n);
+  const tri = (a, b, c, name) => { v1.push(a); v2.push(b); v3.push(c); side.push(name); };
+  // quad grids: [name, origin, U, V] with U x V outward
+  for (const [name, O, U, V] of [
+    ["left",  [0, 0, 0], [0, 0, len], [w / 2, h, 0]],
+    ["right", [w, 0, 0], [-w / 2, h, 0], [0, 0, len]],
+    ["base",  [0, 0, 0], [w, 0, 0], [0, 0, len]],
+  ]) {
+    for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+      const a = at(O, U, V, i, j), b = at(O, U, V, i + 1, j), c = at(O, U, V, i + 1, j + 1), d = at(O, U, V, i, j + 1);
+      tri(a, b, c, name); tri(a, c, d, name);
+    }
+  }
+  // end caps: barycentric subdivision of (A,B,C), same orientation as (A,B,C)
+  for (const [name, A, B, C] of [
+    ["end0", [0, 0, 0], [w / 2, h, 0], [w, 0, 0]],
+    ["end1", [0, 0, len], [w, 0, len], [w / 2, h, len]],
+  ]) {
+    const U = [B[0] - A[0], B[1] - A[1], B[2] - A[2]], V = [C[0] - A[0], C[1] - A[1], C[2] - A[2]];
+    for (let i = 0; i < n; i++) for (let j = 0; j < n - i; j++) {
+      tri(at(A, U, V, i, j), at(A, U, V, i + 1, j), at(A, U, V, i, j + 1), name);
+      if (i + j < n - 1) tri(at(A, U, V, i + 1, j), at(A, U, V, i + 1, j + 1), at(A, U, V, i, j + 1), name);
+    }
+  }
+  return {
+    nf: v1.length, positions: new Float32Array(pos),
+    v1: Int32Array.from(v1), v2: Int32Array.from(v2), v3: Int32Array.from(v3),
+    paints: v1.map(() => ""), side,
+  };
+}
+
+module.exports = { makeGridBox, makeRoofPrism, loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeClosedCube, makeBentStrip, makeBigTriangle, directedViolations, signedVolume };
