@@ -324,6 +324,135 @@
     return { px, py, pz, F, triSt, lid };
   }
 
+  // Wall + bottom for the current depth scale. Ids: rim gids (< NV), offset
+  // points NV + k, bottom extras NV + nOff + j. Returns tris (id triples, PART
+  // winding), coords for ids >= NV, and the offset-id of every rim gid.
+  function buildPlug(mesh, g, bnd, frame, scale, method) {
+    const { vx, vy, vz, NV } = g;
+    const diag = MeshGeo.meshBounds(mesh).diag, weldEps = 1e-6 * diag;
+    const offId = new Map(), extra = []; // extra[k] = [x,y,z] for id NV + k
+    for (const L of bnd.loops) for (const gid of L) {
+      const t = frame.t.get(gid) * scale;
+      if (t <= weldEps) { offId.set(gid, gid); continue; }
+      const d = frame.dir.get(gid);
+      offId.set(gid, NV + extra.length);
+      extra.push([vx[gid] + d[0] * t, vy[gid] + d[1] * t, vz[gid] + d[2] * t]);
+    }
+    const pt = (id) => (id < NV ? [vx[id], vy[id], vz[id]] : extra[id - NV]);
+    const tris = [];
+    const wallDir = new Map(); // offset-edge key -> "u'>v'" (direction the wall traverses)
+    for (const L of bnd.loops) for (let i = 0; i < L.length; i++) {
+      const u = L[i], v = L[(i + 1) % L.length], u2 = offId.get(u), v2 = offId.get(v);
+      if (u2 !== u || v2 !== v) {
+        if (u2 !== u) tris.push([v, u, u2]);
+        if (v2 !== v) tris.push([v, u2, v2]);
+      }
+      wallDir.set(ekey(u2, v2), u2 + ">" + v2);
+    }
+    const offLoops = bnd.loops.map((L) => L.map((gid) => offId.get(gid)));
+    const cap = Caps.triangulateLoops(offLoops, pt, method);
+    orientCapComponents(cap, wallDir);
+    const base = NV + extra.length;
+    for (const ep of cap.extraPts) extra.push(ep);
+    const ref = (i) => (i < cap.verts.length ? cap.verts[i] : base + (i - cap.verts.length));
+    for (const [a, b, c] of cap.tris) tris.push([ref(a), ref(b), ref(c)]);
+    return { tris, pt, nWall: tris.length - cap.tris.length };
+  }
+
+  // Do any of the new triangles cross each other or the mesh? Each new tri is
+  // shrunk 2% toward its centroid so legitimate touching along the rim (and
+  // between adjacent new tris) is not counted; true crossings survive.
+  function anyIntersection(newTris, pt, mesh, grid) {
+    const shrink = (t) => {
+      const p = t.map(pt);
+      const cx = (p[0][0] + p[1][0] + p[2][0]) / 3, cy = (p[0][1] + p[1][1] + p[2][1]) / 3, cz = (p[0][2] + p[1][2] + p[2][2]) / 3;
+      return p.map((q) => [cx + (q[0] - cx) * 0.98, cy + (q[1] - cy) * 0.98, cz + (q[2] - cz) * 0.98]);
+    };
+    const S = newTris.map(shrink);
+    const { n, min, cell, start, list } = grid;
+    const ci = (x, k) => Math.max(0, Math.min(n - 1, Math.floor((x - min[k]) / cell[k])));
+    const box = (tri) => [0, 1, 2].map((k) => [ci(Math.min(tri[0][k], tri[1][k], tri[2][k]), k), ci(Math.max(tri[0][k], tri[1][k], tri[2][k]), k)]);
+    const P = mesh.positions;
+    const faceTri = (f) => [mesh.v1[f], mesh.v2[f], mesh.v3[f]].map((v) => [P[v * 3], P[v * 3 + 1], P[v * 3 + 2]]);
+    // bucket the new tris by cell for the new-vs-new pass
+    const cellNew = new Map();
+    const boxes = S.map(box);
+    boxes.forEach((bx, i) => {
+      for (let x = bx[0][0]; x <= bx[0][1]; x++) for (let y = bx[1][0]; y <= bx[1][1]; y++) for (let z = bx[2][0]; z <= bx[2][1]; z++) {
+        const c = (x * n + y) * n + z;
+        let arr = cellNew.get(c); if (!arr) cellNew.set(c, (arr = [])); arr.push(i);
+      }
+    });
+    const tested = new Set();
+    for (let i = 0; i < S.length; i++) {
+      const bx = boxes[i];
+      for (let x = bx[0][0]; x <= bx[0][1]; x++) for (let y = bx[1][0]; y <= bx[1][1]; y++) for (let z = bx[2][0]; z <= bx[2][1]; z++) {
+        const c = (x * n + y) * n + z;
+        for (const j of cellNew.get(c) || []) {
+          if (j <= i) continue;
+          const key = i * S.length + j; if (tested.has(key)) continue; tested.add(key);
+          if (MeshGeo.triTriIntersect(...S[i], ...S[j])) return true;
+        }
+        for (let e = start[c]; e < start[c + 1]; e++) {
+          const f = list[e], key = -1 - (i * mesh.nf + f); if (tested.has(key)) continue; tested.add(key);
+          if (MeshGeo.triTriIntersect(...S[i], ...faceTri(f))) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  // Volumetric split: the region as a solid plug (patch + inward wall + bottom)
+  // and the remainder with the matching pocket. Both are plain document meshes.
+  // See docs/superpowers/specs/2026-10-13-volumetric-split-design.md.
+  function plugSolids(mesh, subs, opts) {
+    const depth = Math.max(0, +(opts && opts.depth) || 0), method = (opts && opts.method) || "liepa";
+    const g = Cleanup.buildSubGraph(mesh);
+    if (!subs.length) return { error: "Nothing to split there" };
+    if (subs.length >= g.NS) return { error: "That's the whole object" };
+    const bnd = patchBoundary(mesh, subs, g);
+    if (bnd.pinch) return { error: "Region touches itself at a point — paint a wider bridge or gap" };
+    if (!bnd.loops.length) return { error: "Couldn't find the region's outline" };
+    const grid = MeshGeo.faceGrid(mesh);
+    const frame = rimFrame(mesh, g, bnd.loops, depth, grid);
+    let scale = 1, halvings = 0, plug;
+    for (;;) {
+      plug = buildPlug(mesh, g, bnd, frame, scale, method);
+      if (scale === 0 || !anyIntersection(plug.tris, plug.pt, mesh, grid)) break;
+      halvings++;
+      scale = halvings >= 4 ? 0 : scale / 2;
+    }
+    const inSet = new Set(subs);
+    const rest = []; for (let s = 0; s < g.NS; s++) if (!inSet.has(s)) rest.push(s);
+    const partState = g.subLeaf[subs[0]].state;
+    const pocketState = majorityBorderColor(mesh, g, { subs, state: partState });
+    const solid = (st) => Paint.encode({ leaf: true, state: st });
+    // assemble one mesh: conformed surface + plug tris (optionally reversed)
+    const assemble = (surfSubs, reverse, plugState) => {
+      const surf = openSurface(mesh, surfSubs, g);
+      const px = surf.px, py = surf.py, pz = surf.pz, F = surf.F, paints = surf.triSt.map(solid);
+      const local = new Map();
+      const lid = (id) => {
+        if (id < g.NV) return surf.lid(id);
+        let i = local.get(id);
+        if (i === undefined) { const p = plug.pt(id); i = px.length; local.set(id, i); px.push(p[0]); py.push(p[1]); pz.push(p[2]); }
+        return i;
+      };
+      for (const [a, b, c] of plug.tris) {
+        if (reverse) F.push(lid(a), lid(c), lid(b)); else F.push(lid(a), lid(b), lid(c));
+        paints.push(solid(plugState));
+      }
+      const nf = F.length / 3, v1 = new Int32Array(nf), v2 = new Int32Array(nf), v3 = new Int32Array(nf);
+      for (let f = 0; f < nf; f++) { v1[f] = F[f * 3]; v2[f] = F[f * 3 + 1]; v3[f] = F[f * 3 + 2]; }
+      const positions = new Float32Array(px.length * 3);
+      for (let i = 0; i < px.length; i++) { positions[i * 3] = px[i]; positions[i * 3 + 1] = py[i]; positions[i * 3 + 2] = pz[i]; }
+      return { positions, nf, v1, v2, v3, paints };
+    };
+    const part = assemble(subs, false, partState);
+    const remainder = assemble(rest, true, pocketState);
+    if (MeshGeo.checkClosed(part) || MeshGeo.checkClosed(remainder)) return { error: "Couldn't make a clean solid here" };
+    return { part, remainder, info: { halvings, shell: scale === 0, faces: subs.length } };
+  }
   // Most common remainder state adjacent to the part's boundary (the part's subs'
   // neighbouring sub-triangles that are NOT in the part). Falls back to the part's
   // own state.
@@ -458,5 +587,5 @@
     return { objectsModel, rootModel, modelSettings };
   }
 
-  global.Split = { solidFromSubs, remainderSolid, patchBoundary, rimNormals, rimFrame, majorityBorderColor, buildSplitXML, uuid, layoutParts };
+  global.Split = { solidFromSubs, remainderSolid, patchBoundary, rimNormals, rimFrame, plugSolids, majorityBorderColor, buildSplitXML, uuid, layoutParts };
 })(window);

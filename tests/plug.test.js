@@ -111,3 +111,107 @@ test("rimNormals: a T-junction midpoint on a crease sees both sides of the rim",
   assert.ok(n[2] > 0.3, "+z component " + n);
   assert.ok(n[0] * n2[0] + n[1] * n2[1] + n[2] * n2[2] > 0.3, "band-2 component " + n + " vs " + n2);
 });
+
+const closed = (MeshGeo, m, label) => assert.strictEqual(MeshGeo.checkClosed(m), 0, label + " closed");
+
+test("plugSolids: flat plug — volumes sum, bottom at depth, both closed", () => {
+  const { Cleanup, Split, MeshGeo } = loadModules();
+  const box = makeGridBox(4, 4, 4, 4);
+  paintWhere(box, (x, y, z) => z === 4 && x > 1 && x < 3 && y > 1 && y < 3, 1);
+  const r = Split.plugSolids(box, regionOf(Cleanup, box, 1), { depth: 0.5 });
+  assert.ok(!r.error, r.error);
+  closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
+  assert.ok(Math.abs(vol(r.part) - 2) < 1e-6, "part volume " + vol(r.part));
+  assert.ok(Math.abs(vol(r.remainder) - 62) < 1e-6, "remainder volume " + vol(r.remainder));
+  let minZ = Infinity; for (let i = 2; i < r.part.positions.length; i += 3) minZ = Math.min(minZ, r.part.positions[i]);
+  assert.ok(Math.abs(minZ - 3.5) < 1e-6, "bottom at 3.5, got " + minZ);
+  assert.strictEqual(r.info.halvings, 0);
+  // colors: every part triangle is state 1 ("4"); remainder pocket carries the border color (0 -> "")
+  assert.ok(r.part.paints.every((p) => p === "4"));
+  assert.strictEqual(r.remainder.paints.filter((p) => p === "4").length, 0);
+});
+
+test("plugSolids: slab clamps depth to half thickness", () => {
+  const { Cleanup, Split, MeshGeo } = loadModules();
+  const slab = makeGridBox(4, 4, 4, 0.5);
+  paintWhere(slab, (x, y, z) => z === 0.5 && x > 1 && x < 3 && y > 1 && y < 3, 1);
+  const r = Split.plugSolids(slab, regionOf(Cleanup, slab, 1), { depth: 10 });
+  assert.ok(!r.error, r.error);
+  closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
+  assert.ok(Math.abs(vol(r.part) - 1) < 1e-6, "part volume " + vol(r.part));
+  assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 8) < 1e-6);
+});
+
+test("plugSolids: cross-section rim adds no wall (part == lens)", () => {
+  const { Cleanup, Split, MeshGeo } = loadModules();
+  const box = makeGridBox(4, 4, 4, 4);
+  const faces = paintWhere(box, (x, y, z) => z > 2, 1);
+  const r = Split.plugSolids(box, regionOf(Cleanup, box, 1), { depth: 1, method: "earcut" });
+  assert.ok(!r.error, r.error);
+  closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
+  assert.ok(Math.abs(vol(r.part) - 32) < 1e-6, "lens volume " + vol(r.part));
+  assert.ok(Math.abs(vol(r.remainder) - 32) < 1e-6);
+  // no wall: every part vertex is on the original surface (z >= 2)
+  for (let i = 2; i < r.part.positions.length; i += 3) assert.ok(r.part.positions[i] >= 2 - 1e-9);
+  assert.ok(r.part.nf >= faces.length, "patch kept");
+});
+
+test("plugSolids: convex ridge forces depth halving, output still closed", () => {
+  const { Cleanup, Split, MeshGeo } = loadModules();
+  const roof = makeRoofPrism(4, 3, 2, 4);
+  // band over the ridge: the upper half of both slopes. Inward rays from the
+  // two mid-lines converge under the ridge and (at half the far-wall distance)
+  // still cross each other -> the first plug self-intersects -> halving.
+  const P = roof.positions;
+  for (let f = 0; f < roof.nf; f++) {
+    const y = (P[roof.v1[f] * 3 + 1] + P[roof.v2[f] * 3 + 1] + P[roof.v3[f] * 3 + 1]) / 3;
+    if ((roof.side[f] === "left" || roof.side[f] === "right") && y > 1.5) roof.paints[f] = "4";
+  }
+  const r = Split.plugSolids(roof, regionOf(Cleanup, roof, 1), { depth: 10 });
+  assert.ok(!r.error, r.error);
+  assert.ok(r.info.halvings >= 1, "halvings " + r.info.halvings);
+  closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
+  assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 12) < 1e-6);
+  assert.ok(vol(r.part) > 0 && vol(r.remainder) > 0);
+});
+
+test("plugSolids refuses pinch, whole-mesh and empty regions", () => {
+  const { Cleanup, Split } = loadModules();
+  const box = makeGridBox(4, 4, 4, 4);
+  const hole = (x, y) => (x > 1 && x < 2 && y > 1 && y < 2) || (x > 2 && x < 3 && y > 2 && y < 3);
+  paintWhere(box, (x, y, z) => z === 4 && !hole(x, y), 1);
+  assert.match(Split.plugSolids(box, regionOf(Cleanup, box, 1), { depth: 1 }).error, /touches itself/);
+  const all = makeGridBox(2, 2, 2, 2);
+  paintWhere(all, () => true, 1);
+  assert.match(Split.plugSolids(all, regionOf(Cleanup, all, 1), { depth: 1 }).error, /whole object/);
+  assert.match(Split.plugSolids(all, [], { depth: 1 }).error, /Nothing/);
+});
+
+test("plugSolids: refined (subdivided) paint splits to closed outputs", () => {
+  const { Cleanup, Split, MeshGeo, Paint } = loadModules();
+  const box = makeGridBox(2, 4, 4, 4);
+  const top = paintWhere(box, (x, y, z) => z === 4, 1);
+  const leaf = { leaf: true, state: 1 };
+  box.paints[top[0]] = Paint.encode({ leaf: false, split: 3, special: 0, kids: [leaf, leaf, leaf, leaf] });
+  const r = Split.plugSolids(box, regionOf(Cleanup, box, 1), { depth: 1 });
+  assert.ok(!r.error, r.error);
+  closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
+  assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 64) < 1e-6);
+});
+
+test("plugSolids: chained split -> split on remainder -> plane cut conserves volume", () => {
+  const { Cleanup, Split, MeshGeo, PlaneCut } = loadModules();
+  const box = makeGridBox(4, 4, 4, 4);
+  paintWhere(box, (x, y, z) => z === 4 && x > 1 && x < 3 && y > 1 && y < 3, 1);
+  paintWhere(box, (x, y, z) => x === 4 && z > 1 && z < 3 && y > 1 && y < 3, 2);
+  const a = Split.plugSolids(box, regionOf(Cleanup, box, 1), { depth: 0.5 });
+  assert.ok(!a.error, a.error);
+  const b = Split.plugSolids(a.remainder, regionOf(Cleanup, a.remainder, 2), { depth: 0.7 });
+  assert.ok(!b.error, b.error);
+  const cut = PlaneCut.cutMesh(a.part, { px: 0, py: 0, pz: 3.75, nx: 0, ny: 0, nz: 1 });
+  assert.ok(cut.above && cut.below, "plane crosses the part");
+  const pieces = [b.remainder, b.part, cut.above, cut.below];
+  for (const m of pieces) closed(MeshGeo, m, "piece");
+  const total = pieces.reduce((s, m) => s + vol(m), 0);
+  assert.ok(Math.abs(total - 64) < 1e-5, "total " + total);
+});
