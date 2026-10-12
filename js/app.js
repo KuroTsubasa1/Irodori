@@ -364,6 +364,8 @@
   function doRotate(axis, dir) {
     if (!doc) return;
     const ang = (dir * Math.PI) / 2;
+    cancelRing(); // placement point and fitted axis are in the old frame
+    if (ringFit) { ringFit = null; document.querySelectorAll("#ringAxes button").forEach((x) => x.classList.toggle("on", x.dataset.axis === "2")); }
     for (const m of doc.meshes) { rotateMesh(m, axis, ang); Cleanup.invalidateSub(m); }
     computeModelSize();
     render(null);
@@ -503,8 +505,11 @@
   }
   function placeRing(hit) {
     if (!hit || hit.localSub == null) return;
-    if (previewActive) { restore(current()); previewActive = false; render(null); }
-    pendingRing = ringSrcFromHit(hit);
+    // resolve the face on the graph the hit was picked on — face indices
+    // survive the restore below, sub indices do not
+    const src = ringSrcFromHit(hit);
+    if (previewActive) clearPreview();
+    pendingRing = src;
     $("ringApply").disabled = false;
     $("ringCancel").disabled = false;
     showRing(pendingRing);
@@ -518,6 +523,7 @@
   function applyRing() {
     if (!pendingRing) { toast("Click the model to place the ring first", true); return; }
     if (paintState == null) { toast("Pick a paint color first", true); return; }
+    if (previewActive) clearPreview(); // never commit an auto-clean preview under "Ring"
     const src = pendingRing;
     const m = doc.meshes[src.meshIndex];
     const n = ringAxis(), h = ringHalf();
@@ -881,6 +887,7 @@
     if (!doc) return;
     if (isolated) { isolated = null; Viewer.setVisibleMeshes(null); }
     clearHoverPreview();
+    cancelRing(); // reset can swap the mesh list (plane cuts)
     restore(history[0].state);
     previewActive = false;
     buildPalette();
