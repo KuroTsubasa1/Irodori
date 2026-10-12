@@ -183,15 +183,18 @@
 
   const ekey = (a, b) => (a < b ? a + "_" + b : b + "_" + a);
 
+  // Edge u-v split at every T-junction midpoint recorded by midOf: [u, ..., v].
+  function decomposeEdge(midOf, u, v) {
+    const m = midOf ? midOf(u, v) : -1;
+    return (m >= 0 && m !== u && m !== v) ? decomposeEdge(midOf, u, m).concat(decomposeEdge(midOf, m, v).slice(1)) : [u, v];
+  }
+
   // Conformed boundary of a sub-triangle set: surface-directed rim loops (gids
   // from the welded sub graph), the surface direction of every rim edge, and a
   // pinch flag (a rim vertex with != 2 rim edges — the region touches itself).
   function patchBoundary(mesh, subs, g) {
     const { sv, midOf } = g;
-    const decompose = (u, v) => {
-      const m = midOf ? midOf(u, v) : -1;
-      return (m >= 0 && m !== u && m !== v) ? decompose(u, m).concat(decompose(m, v).slice(1)) : [u, v];
-    };
+    const decompose = (u, v) => decomposeEdge(midOf, u, v);
     const edges = new Map(); // key -> { u, v, count }
     for (let k = 0; k < subs.length; k++) {
       const s = subs[k];
@@ -216,26 +219,37 @@
     return { loops, surfDir, pinch };
   }
 
+  // Unit area-weighted normal at every rim vertex (rim: Set of gids), summed
+  // over all incident sub-triangles on BOTH sides of the rim. A sub contributes
+  // to every vertex of its conformed polygon, so T-junction midpoints lying on
+  // a sub's edge (not a corner) are included.
+  function rimNormals(mesh, g, rim) {
+    const { sv, vx, vy, vz, NS, midOf } = g;
+    const acc = new Map(); for (const gid of rim) acc.set(gid, [0, 0, 0]);
+    for (let s = 0; s < NS; s++) {
+      const a = sv[s * 3], b = sv[s * 3 + 1], c = sv[s * 3 + 2];
+      const poly = decomposeEdge(midOf, a, b).concat(decomposeEdge(midOf, b, c).slice(1), decomposeEdge(midOf, c, a).slice(1, -1));
+      if (!poly.some((gid) => rim.has(gid))) continue;
+      const ux = vx[b] - vx[a], uy = vy[b] - vy[a], uz = vz[b] - vz[a];
+      const wx = vx[c] - vx[a], wy = vy[c] - vy[a], wz = vz[c] - vz[a];
+      const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx; // area-weighted
+      for (const gid of poly) { const t = acc.get(gid); if (t) { t[0] += nx; t[1] += ny; t[2] += nz; } }
+    }
+    for (const v of acc.values()) { const L = Math.hypot(v[0], v[1], v[2]) || 1; v[0] /= L; v[1] /= L; v[2] /= L; }
+    return acc;
+  }
+
   // Inward direction and depth for every rim vertex. dir = −(smoothed model
   // normal); t = min(depth, 0.5·t_hit) · |cos θ| (θ: normal vs the loop's
   // best-fit plane normal) — see the spec's "Per-rim-vertex depth".
   function rimFrame(mesh, g, loops, depth, grid) {
-    const { sv, vx, vy, vz, NS } = g;
-    const rim = new Set(); for (const L of loops) for (const gid of L) rim.add(gid);
-    const acc = new Map(); for (const gid of rim) acc.set(gid, [0, 0, 0]);
-    for (let s = 0; s < NS; s++) {
-      const a = sv[s * 3], b = sv[s * 3 + 1], c = sv[s * 3 + 2];
-      if (!rim.has(a) && !rim.has(b) && !rim.has(c)) continue;
-      const ux = vx[b] - vx[a], uy = vy[b] - vy[a], uz = vz[b] - vz[a];
-      const wx = vx[c] - vx[a], wy = vy[c] - vy[a], wz = vz[c] - vz[a];
-      const nx = uy * wz - uz * wy, ny = uz * wx - ux * wz, nz = ux * wy - uy * wx; // area-weighted
-      for (const gid of [a, b, c]) { const t = acc.get(gid); if (t) { t[0] += nx; t[1] += ny; t[2] += nz; } }
-    }
+    const { vx, vy, vz } = g;
+    const acc = rimNormals(mesh, g, new Set(loops.reduce((a, L) => a.concat(L), [])));
     const unit = (v) => { const L = Math.hypot(v[0], v[1], v[2]) || 1; return [v[0] / L, v[1] / L, v[2] / L]; };
     const dir = new Map(), t = new Map();
     const diag = MeshGeo.meshBounds(mesh).diag;
     for (const L of loops) {
-      let N = L.map((gid) => unit(acc.get(gid)));
+      let N = L.map((gid) => acc.get(gid));
       for (let pass = 0; pass < 2; pass++) // two 1-ring smoothing passes along the loop
         N = N.map((n, i) => { const p = N[(i + L.length - 1) % L.length], q = N[(i + 1) % L.length]; return unit([p[0] + n[0] + q[0], p[1] + n[1] + q[1], p[2] + n[2] + q[2]]); });
       const pl = Caps.bestFitPlane(L.map((gid) => [vx[gid], vy[gid], vz[gid]]));
@@ -295,10 +309,7 @@
       if (id === undefined) { id = px.length; remap.set(gid, id); px.push(vx[gid]); py.push(vy[gid]); pz.push(vz[gid]); }
       return id;
     };
-    const decompose = (u, v) => {
-      const m = midOf ? midOf(u, v) : -1;
-      return (m >= 0 && m !== u && m !== v) ? decompose(u, m).concat(decompose(m, v).slice(1)) : [u, v];
-    };
+    const decompose = (u, v) => decomposeEdge(midOf, u, v);
     const F = [], triSt = [];
     for (const s of subs) {
       const a = sv[s * 3], b = sv[s * 3 + 1], c = sv[s * 3 + 2], st = subLeaf[s].state;
@@ -447,5 +458,5 @@
     return { objectsModel, rootModel, modelSettings };
   }
 
-  global.Split = { solidFromSubs, remainderSolid, patchBoundary, rimFrame, majorityBorderColor, buildSplitXML, uuid, layoutParts };
+  global.Split = { solidFromSubs, remainderSolid, patchBoundary, rimNormals, rimFrame, majorityBorderColor, buildSplitXML, uuid, layoutParts };
 })(window);
