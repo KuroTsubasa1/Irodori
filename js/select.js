@@ -155,6 +155,50 @@
     return [v[0] / L, v[1] / L, v[2] / L];
   }
 
+  // Ring slab |(p − c)·n| ≤ h (c,n are [x,y,z], n unit). Flood parent faces
+  // from seedFace, accepting a face iff its triangle meets the slab — i.e. its
+  // corners are not all strictly on one side. Exact for any triangle size, so
+  // the loop never stops short on coarse faces. Returns Int32Array (empty when
+  // the seed misses the slab).
+  function ringFaces(mesh, seedFace, c, n, h) {
+    const { start, list, nf } = Cleanup.faceGraph(mesh);
+    const P = mesh.positions;
+    const d = (vi) => (P[vi * 3] - c[0]) * n[0] + (P[vi * 3 + 1] - c[1]) * n[1] + (P[vi * 3 + 2] - c[2]) * n[2];
+    const meets = (f) => {
+      const a = d(mesh.v1[f]), b = d(mesh.v2[f]), e = d(mesh.v3[f]);
+      return !((a > h && b > h && e > h) || (a < -h && b < -h && e < -h));
+    };
+    if (seedFace < 0 || seedFace >= nf || !meets(seedFace)) return new Int32Array(0);
+    const seen = new Uint8Array(nf);
+    const out = [];
+    const stk = [seedFace];
+    seen[seedFace] = 1;
+    while (stk.length) {
+      const u = stk.pop();
+      out.push(u);
+      for (let e = start[u]; e < start[u + 1]; e++) {
+        const v = list[e];
+        if (!seen[v] && meets(v)) { seen[v] = 1; stk.push(v); }
+      }
+    }
+    return Int32Array.from(out);
+  }
+
+  // Leaves (local subs) of `faces` whose centroid lies in the ring slab — the
+  // coarse hover preview and the refine-off paint set.
+  function ringLeaves(mesh, faces, c, n, h) {
+    const g = Cleanup.buildSubGraph(mesh);
+    const mask = new Uint8Array(mesh.nf);
+    for (let i = 0; i < faces.length; i++) mask[faces[i]] = 1;
+    const out = [];
+    for (let s = 0; s < g.NS; s++) {
+      if (!mask[g.subFace[s]]) continue;
+      const dd = (g.cen[s * 3] - c[0]) * n[0] + (g.cen[s * 3 + 1] - c[1]) * n[1] + (g.cen[s * 3 + 2] - c[2]) * n[2];
+      if (Math.abs(dd) <= h) out.push(s);
+    }
+    return Int32Array.from(out);
+  }
+
   // Band of connected sub-triangles within +/- half along an arbitrary axis.
   function selectBandAxis(mesh, seedSub, half, ax, ay, az) {
     const g = Cleanup.buildSubGraph(mesh);
@@ -324,6 +368,8 @@
     facesToSubs,
     featureAxis,
     tiltAxis,
+    ringFaces,
+    ringLeaves,
     mirrorMap,
     axisCenters,
     mirrorStamps,
