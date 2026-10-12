@@ -419,6 +419,36 @@
     cutPlaneObj.visible = true;
   }
 
+  let ringPlanesObj = null;
+  // Show the ring slab's two bounding planes as translucent discs
+  // ({cx,cy,cz,nx,ny,nz,h,r}: center, unit axis, half-thickness, disc radius)
+  // or hide (null).
+  function setRingPlanes(rp) {
+    if (!rp) { if (ringPlanesObj) ringPlanesObj.visible = false; return; }
+    if (!ringPlanesObj) {
+      ringPlanesObj = new THREE.Group();
+      const cg = new THREE.CircleGeometry(1, 64);
+      const eg = new THREE.EdgesGeometry(cg); // coplanar inner edges drop out: rim only
+      const cm = new THREE.MeshBasicMaterial({ color: 0x4ea1ff, transparent: true, opacity: 0.18, side: THREE.DoubleSide, depthWrite: false });
+      const lm = new THREE.LineBasicMaterial({ color: 0x2f7fe0 });
+      for (let i = 0; i < 2; i++) {
+        const disc = new THREE.Mesh(cg, cm);
+        disc.add(new THREE.LineSegments(eg, lm));
+        disc.renderOrder = 998;
+        ringPlanesObj.add(disc);
+      }
+      scene.add(ringPlanesObj);
+    }
+    const [a, b] = ringPlanesObj.children;
+    a.scale.setScalar(rp.r); b.scale.setScalar(rp.r);
+    a.position.set(0, 0, rp.h); b.position.set(0, 0, -rp.h);
+    ringPlanesObj.position.set(rp.cx, rp.cy, rp.cz);
+    tmpV.set(rp.nx, rp.ny, rp.nz).normalize();
+    tmpQ.setFromUnitVectors(ZUP, tmpV); // CircleGeometry faces +Z
+    ringPlanesObj.quaternion.copy(tmpQ);
+    ringPlanesObj.visible = true;
+  }
+
   // parts: [{ meshIndex, subs, state }]
   function setSplitParts(parts) {
     const prevById = new Map();
@@ -624,6 +654,7 @@
     subTriangleCount: () => totalSub,
     setSplitParts,
     setCutPlane,
+    setRingPlanes,
     setPreview,
     clearPreview,
     setVisibleMeshes,

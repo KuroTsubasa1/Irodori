@@ -92,9 +92,22 @@
         </div>
 
         <div class="opt" data-panel="ring" hidden>
-          <span class="optlabel">Ring thickness</span>
+          <span class="optlabel">Axis</span>
+          <div class="axes" id="ringAxes">
+            <button type="button" data-axis="0">X</button>
+            <button type="button" data-axis="1">Y</button>
+            <button type="button" data-axis="2" class="on">Z</button>
+            <button type="button" data-axis="fit" title="Fit the axis to the feature under the ring">Fit</button>
+          </div>
+          <span class="optlabel">Tilt</span>
+          <input type="range" id="ringTiltA" min="-90" max="90" value="0" title="Tilt A" />
+          <input type="range" id="ringTiltB" min="-90" max="90" value="0" title="Tilt B" />
+          <span class="optlabel">Thickness</span>
           <input type="range" id="ringThick" min="1" max="100" value="14" />
           <span class="sizedot" id="ringPrev"></span>
+          <label class="check"><input type="checkbox" id="ringRefine" checked /><span>Refine edges</span></label>
+          <button type="button" id="ringApply" class="primary" disabled>Apply</button>
+          <button type="button" id="ringCancel" class="icon" disabled>Cancel</button>
         </div>
 
         <div class="opt" data-panel="fill" hidden>

@@ -147,6 +147,7 @@
       splitParts = [];
       isolated = null;
       pendingDecal = null;
+      cancelRing();
       Viewer.setVisibleMeshes(null);
       Viewer.setPartVisibility(null);
       for (const m of doc.meshes) Cleanup.computeDominant(m);
@@ -336,6 +337,7 @@
     Viewer.setTool(name === "brush" ? "paint" : (name === "ring" || name === "fill" || name === "split" || name === "stamp") ? "pick" : "orbit");
     Viewer.enableHover(name === "brush" || name === "ring" || name === "split" || name === "fill" || name === "stamp");
     if (name !== "stamp" && typeof cancelStamp === "function") cancelStamp();
+    if (name !== "ring" && typeof cancelRing === "function") cancelRing();
     if (name !== "split" && name !== "ring" && name !== "fill") clearHoverPreview();
     if (name === "cut") updateCutPlane(); else Viewer.setCutPlane(null);
     if (doc && (paintTool || name === "split")) ensureSubGraphs("Preparing tool…");
@@ -362,6 +364,8 @@
   function doRotate(axis, dir) {
     if (!doc) return;
     const ang = (dir * Math.PI) / 2;
+    cancelRing(); // placement point and fitted axis are in the old frame
+    if (ringFit) { ringFit = null; document.querySelectorAll("#ringAxes button").forEach((x) => x.classList.toggle("on", x.dataset.axis === "2")); }
     for (const m of doc.meshes) { rotateMesh(m, axis, ang); Cleanup.invalidateSub(m); }
     computeModelSize();
     render(null);
@@ -437,24 +441,113 @@
   });
 
   const ringNeighborhood = () => modelSize * 0.2;
-  function doRing(hit) {
-    if (paintState == null) return;
-    if (previewActive) { restore(current()); previewActive = false; }
-    const m = doc.meshes[hit.meshIndex];
-    let subs;
-    if (previewCache && previewCache.tool === "ring" && previewCache.meshIndex === hit.meshIndex && previewCache.members.has(hit.localSub)) {
-      subs = previewCache.subs;
-    } else {
-      const fa = Cleanup.featureAxis(m, hit.localSub, ringNeighborhood(), hit.normal.x, hit.normal.y, hit.normal.z);
-      subs = Cleanup.selectBandAxis(m, hit.localSub, ringHalf(), fa.ax, fa.ay, fa.az);
+  // ---------- ring tool ----------
+  // Placement source: { meshIndex, face, sub, c:[x,y,z], nrm:[x,y,z] }.
+  let pendingRing = null; // frozen placement once the user clicks
+  let ringFit = null;     // fitted base axis [x,y,z] while "Fit" is the active base
+  const ringSrcFromHit = (hit) => ({
+    meshIndex: hit.meshIndex,
+    face: Cleanup.buildSubGraph(doc.meshes[hit.meshIndex]).subFace[hit.localSub],
+    sub: hit.localSub,
+    c: [hit.point.x, hit.point.y, hit.point.z],
+    nrm: [hit.normal.x, hit.normal.y, hit.normal.z],
+  });
+  // Current ring axis: X/Y/Z (or the fitted axis) tilted by the two sliders.
+  function ringAxis() {
+    const on = document.querySelector("#ringAxes button.on");
+    const ta = (+$("ringTiltA").value) * Math.PI / 180, tb = (+$("ringTiltB").value) * Math.PI / 180;
+    if (on && on.dataset.axis === "fit" && ringFit) {
+      const n = ringFit, a = Math.abs(n[0]) < 0.9 ? [1, 0, 0] : [0, 1, 0];
+      const u = [n[1] * a[2] - n[2] * a[1], n[2] * a[0] - n[0] * a[2], n[0] * a[1] - n[1] * a[0]];
+      const L = Math.hypot(u[0], u[1], u[2]);
+      return Cleanup.tiltAxis(n, [u[0] / L, u[1] / L, u[2] / L], ta, tb);
     }
-    if (!subs.length) return;
+    const k = on && on.dataset.axis !== "fit" ? +on.dataset.axis : 2;
+    const n = [0, 0, 0], u = [0, 0, 0];
+    n[k] = 1; u[(k + 1) % 3] = 1;
+    return Cleanup.tiltAxis(n, u, ta, tb);
+  }
+  function hideRing() { clearHoverPreview(); Viewer.setRingPlanes(null); }
+  // Tint the ring's in-slab leaves and draw the slab gizmo for `src`.
+  function showRing(src) {
     clearHoverPreview();
-    Cleanup.applyStates(m, subs, paintState);
-    pushHistory("Ring");
-    render(null);
-    updateStats();
-    toast("Ring · " + subs.length.toLocaleString() + " sub-triangles");
+    const m = doc.meshes[src.meshIndex];
+    const g = Cleanup.buildSubGraph(m);
+    const n = ringAxis(), h = ringHalf(), c = src.c;
+    const subs = Cleanup.ringLeaves(m, Cleanup.ringFaces(m, src.face, c, n, h), c, n, h);
+    const gl = [];
+    for (const s of subs) { const gi = Viewer.toGlobalSub(src.meshIndex, s); if (gi >= 0) gl.push(gi); }
+    Viewer.setPreview(gl);
+    previewCache = { tool: "ring", meshIndex: src.meshIndex, members: new Set(subs), globalSubs: gl, subs };
+    // gizmo: loop centroid projected onto the mid-plane; radius covers the loop
+    let mx = 0, my = 0, mz = 0;
+    for (const s of subs) { mx += g.cen[s * 3]; my += g.cen[s * 3 + 1]; mz += g.cen[s * 3 + 2]; }
+    let r = modelSize * 0.15;
+    if (subs.length) {
+      mx /= subs.length; my /= subs.length; mz /= subs.length;
+      const dd = (mx - c[0]) * n[0] + (my - c[1]) * n[1] + (mz - c[2]) * n[2];
+      mx -= dd * n[0]; my -= dd * n[1]; mz -= dd * n[2];
+      let r2 = 0;
+      for (const s of subs) {
+        const x = g.cen[s * 3] - mx, y = g.cen[s * 3 + 1] - my, z = g.cen[s * 3 + 2] - mz;
+        const p = x * n[0] + y * n[1] + z * n[2];
+        r2 = Math.max(r2, (x - p * n[0]) ** 2 + (y - p * n[1]) ** 2 + (z - p * n[2]) ** 2);
+      }
+      r = Math.sqrt(r2) * 1.3 || r;
+    } else { mx = c[0]; my = c[1]; mz = c[2]; }
+    Viewer.setRingPlanes({ cx: mx, cy: my, cz: mz, nx: n[0], ny: n[1], nz: n[2], h, r });
+  }
+  // Recompute after an axis/tilt/thickness change.
+  function refreshRing() {
+    if (!doc || activeTool !== "ring") return;
+    if (pendingRing) showRing(pendingRing);
+    else { hideRing(); if (lastHit) onHover(lastHit); }
+  }
+  function placeRing(hit) {
+    if (!hit || hit.localSub == null) return;
+    // resolve the face on the graph the hit was picked on — face indices
+    // survive the restore below, sub indices do not
+    const src = ringSrcFromHit(hit);
+    if (previewActive) clearPreview();
+    pendingRing = src;
+    $("ringApply").disabled = false;
+    $("ringCancel").disabled = false;
+    showRing(pendingRing);
+  }
+  function cancelRing() {
+    pendingRing = null;
+    if (doc) hideRing();
+    $("ringApply").disabled = true;
+    $("ringCancel").disabled = true;
+  }
+  function applyRing() {
+    if (!pendingRing) { toast("Click the model to place the ring first", true); return; }
+    if (paintState == null) { toast("Pick a paint color first", true); return; }
+    if (previewActive) clearPreview(); // never commit an auto-clean preview under "Ring"
+    const src = pendingRing;
+    const m = doc.meshes[src.meshIndex];
+    const n = ringAxis(), h = ringHalf();
+    busy("Painting ring…", () => {
+      const faces = Cleanup.ringFaces(m, src.face, src.c, n, h);
+      const res = Cleanup.paintRing(m, faces, src.c, n, h, paintState, { refine: $("ringRefine").checked, maxDepth: 4 });
+      if (!res.changedFaces.size) { toast("Nothing painted — already that color", true); return; }
+      pushHistory("Ring");
+      cancelRing();
+      render(null);
+      ensureSubGraphs("Preparing tool…");
+      updateStats();
+      toast("Ring · " + faces.length.toLocaleString() + " faces");
+    });
+  }
+  // Fit: one-shot PCA feature axis at the placed (or hovered) point.
+  function fitRing() {
+    const src = pendingRing || (lastHit && lastHit.localSub != null ? ringSrcFromHit(lastHit) : null);
+    if (!src) { toast("Hover or place the ring on the model first", true); return; }
+    const fa = Cleanup.featureAxis(doc.meshes[src.meshIndex], src.sub, ringNeighborhood(), src.nrm[0], src.nrm[1], src.nrm[2]);
+    ringFit = [fa.ax, fa.ay, fa.az];
+    document.querySelectorAll("#ringAxes button").forEach((x) => x.classList.toggle("on", x.dataset.axis === "fit"));
+    $("ringTiltA").value = 0; $("ringTiltB").value = 0;
+    refreshRing();
   }
 
   function onHover(hit) {
@@ -478,7 +571,15 @@
       previewCache = { tool: "stamp", meshIndex: src.meshIndex, members: new Set(subs), globalSubs: g, subs };
       return;
     }
-    if (activeTool === "split" || activeTool === "ring" || activeTool === "fill") {
+    if (activeTool === "ring") {
+      Viewer.hideCursor();
+      if (pendingRing) return; // frozen until re-placed, applied or cancelled
+      if (!hit || hit.localSub == null) { hideRing(); return; }
+      if (previewCache && previewCache.tool === "ring" && previewCache.meshIndex === hit.meshIndex && previewCache.members.has(hit.localSub)) return;
+      showRing(ringSrcFromHit(hit));
+      return;
+    }
+    if (activeTool === "split" || activeTool === "fill") {
       Viewer.hideCursor();
       if (!hit || hit.localSub == null) { clearHoverPreview(); return; }
       if (previewCache && previewCache.tool === activeTool && previewCache.meshIndex === hit.meshIndex && previewCache.members.has(hit.localSub)) return;
@@ -487,16 +588,13 @@
       let subs;
       if (activeTool === "split") {
         subs = Cleanup.selectColorRegion(m, hit.localSub, claimedByMesh()[hit.meshIndex]);
-      } else if (activeTool === "fill") {
+      } else {
         if (fillSmart()) {
           const faces = Cleanup.selectSmartFaces(m, Cleanup.buildSubGraph(m).subFace[hit.localSub], +$("fillAngle").value);
           subs = Cleanup.facesToSubs(m, faces);
         } else {
           subs = Cleanup.selectColorRegion(m, hit.localSub); // fillRegion's flood (no claimed-exclusion)
         }
-      } else {
-        const fa = Cleanup.featureAxis(m, hit.localSub, ringNeighborhood(), hit.normal.x, hit.normal.y, hit.normal.z);
-        subs = Cleanup.selectBandAxis(m, hit.localSub, ringHalf(), fa.ax, fa.ay, fa.az);
       }
       if (!subs.length) return;
       const members = new Set(subs);
@@ -657,7 +755,7 @@
     toast("Split " + subs.length.toLocaleString() + " sub-triangles into a new solid");
   }
   Viewer.onPick((hit) => {
-    if (activeTool === "ring") doRing(hit);
+    if (activeTool === "ring") placeRing(hit);
     else if (activeTool === "fill") (fillSmart() ? doSmartFill : doFill)(hit);
     else if (activeTool === "split") doSplit(hit);
     else if (activeTool === "stamp") {
@@ -678,11 +776,10 @@
     const lo = modelBBox.lo, hi = modelBBox.hi;
     const p = [(lo[0] + hi[0]) / 2, (lo[1] + hi[1]) / 2, (lo[2] + hi[2]) / 2];
     p[axis] = lo[axis] + t * (hi[axis] - lo[axis]);
-    const n = [0, 0, 0];
-    n[axis] = 1;
-    const rot = (v, ax2, ang) => { const i = (ax2 + 1) % 3, j = (ax2 + 2) % 3; const vi = v[i], vj = v[j]; v[i] = vi * Math.cos(ang) - vj * Math.sin(ang); v[j] = vi * Math.sin(ang) + vj * Math.cos(ang); };
-    rot(n, (axis + 1) % 3, ta);
-    rot(n, (axis + 2) % 3, tb);
+    const base = [0, 0, 0], u = [0, 0, 0];
+    base[axis] = 1;
+    u[(axis + 1) % 3] = 1;
+    const n = Cleanup.tiltAxis(base, u, ta, tb);
     return { px: p[0], py: p[1], pz: p[2], nx: n[0], ny: n[1], nz: n[2] };
   }
   function updateCutPlane() { if (!doc || activeTool !== "cut") return; Viewer.setCutPlane(cutPlane()); }
@@ -790,6 +887,7 @@
     if (!doc) return;
     if (isolated) { isolated = null; Viewer.setVisibleMeshes(null); }
     clearHoverPreview();
+    cancelRing(); // reset can swap the mesh list (plane cuts)
     restore(history[0].state);
     previewActive = false;
     buildPalette();
@@ -803,6 +901,7 @@
     if (!doc || idx < 0 || idx >= history.length) return;
     if (isolated) { isolated = null; Viewer.setVisibleMeshes(null); }
     clearHoverPreview();
+    cancelRing(); // undo/redo can change faces under a placed ring
     previewActive = false; histIndex = idx;
     restore(current()); buildPalette(); render(null); updateStats(); updateHist();
     $("previewInfo").textContent = "";
@@ -913,10 +1012,17 @@
     updateSizeDots();
     if (activeTool === "brush" && lastHit) onHover(lastHit);
   });
-  $("ringThick").addEventListener("input", () => {
-    updateSizeDots();
-    if (activeTool === "ring") { clearHoverPreview(); if (lastHit) onHover(lastHit); }
-  });
+  $("ringThick").addEventListener("input", () => { updateSizeDots(); refreshRing(); });
+  ["ringTiltA", "ringTiltB"].forEach((id) => $(id).addEventListener("input", refreshRing));
+  document.querySelectorAll("#ringAxes button").forEach((b) =>
+    b.addEventListener("click", () => {
+      if (b.dataset.axis === "fit") { fitRing(); return; }
+      document.querySelectorAll("#ringAxes button").forEach((x) => x.classList.toggle("on", x === b));
+      refreshRing();
+    })
+  );
+  $("ringApply").addEventListener("click", applyRing);
+  $("ringCancel").addEventListener("click", cancelRing);
   document.querySelectorAll("#symAxes button").forEach((b) =>
     b.addEventListener("click", () => b.classList.toggle("on"))
   );
@@ -982,6 +1088,15 @@
     // tool shortcuts: modifier-free, ignored while typing in a field
     if (mod || e.altKey) return;
     const tag = (e.target && e.target.tagName) || "";
+    // placed ring: Enter applies / Esc cancels, even with a ring slider focused
+    if (activeTool === "ring" && pendingRing && (e.key === "Enter" || e.key === "Escape")) {
+      const t = e.target && e.target.type;
+      if (tag !== "INPUT" || t === "range" || t === "checkbox") {
+        e.preventDefault();
+        if (e.key === "Enter") applyRing(); else cancelRing();
+        return;
+      }
+    }
     if (tag === "INPUT" || tag === "SELECT" || tag === "TEXTAREA") return;
     if (e.key === "Escape") { $("orientPop").hidden = true; setTool("orbit"); return; }
     const k = e.key.toLowerCase();
