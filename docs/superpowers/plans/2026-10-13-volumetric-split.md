@@ -619,7 +619,9 @@ git commit -m "feat: split rim analysis — patchBoundary and rimFrame + grid bo
 
 **Interfaces:**
 - Consumes: Task 2 functions, `openSurface(mesh, subs, g) → { px, py, pz, F, triSt, lid }`, `orientCapComponents(cap, surfDir)`, `majorityBorderColor(mesh, g, { subs, state })`, `Caps.triangulateLoops(loops, getPt, method) → { verts, extraPts, tris }`, `Paint.encode`, `MeshGeo.*`.
-- Produces: `Split.plugSolids(mesh, subs, { depth, method }) → { part, remainder, info: { halvings, shell, faces } } | { error }`. `part`/`remainder` are `{ positions: Float32Array, nf, v1, v2, v3: Int32Array, paints: string[] }`.
+- Produces: `Split.plugSolids(mesh, subs, { depth, method }) → { part, remainder, info: { halvings, shell, faces } } | { error, info? }` (gate errors carry `info`). `part`/`remainder` are `{ positions: Float32Array, nf, v1, v2, v3: Int32Array, paints: string[] }`.
+- Also `MeshGeo.signedVolume(mesh)`; the gate requires `checkClosed === 0` AND `signedVolume > 0` for both outputs.
+- **Amended during execution (see ledger rulings):** the roof "halving" premise was wrong — the roof and a through-groove (`makeUChannel`) are POSITIVE cases (no halving); the refusal/halving case is a closed pocket (`makePocketBox`), whose flat bottom cap crosses the pocket walls → 4 halvings → inside-out shell → refused by the volume gate.
 
 - [ ] **Step 1: Write the failing tests** — append to `tests/plug.test.js`:
 
