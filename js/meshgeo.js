@@ -42,21 +42,27 @@
 
   // Möller 1997 "NoDivTriTriIsect" with the epsilon test. Coplanar -> false
   // (we never need coplanar overlap for self-intersection screening).
-  const EPS = 1e-9;
+  // The on-plane snap is SCALE-RELATIVE: a signed distance (in units of the
+  // unnormalised normal) snaps to 0 only within REL_EPS of the pair's size.
+  // An absolute 1e-9 on |N| ~ 1e-5 (0.005 mm triangles) snapped planes 3e-5 mm
+  // apart and reported near-parallel, laterally SEPARATED neighbours as crossing.
+  const REL_EPS = 1e-9;
+  const len3 = (a) => Math.hypot(a[0], a[1], a[2]);
   function triTriIntersect(V0, V1, V2, U0, U1, U2) {
     const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
     const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
     const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
+    const size = Math.max(len3(sub(V1, V0)), len3(sub(V2, V0)), len3(sub(U1, U0)), len3(sub(U2, U0)));
     const N1 = cross(sub(V1, V0), sub(V2, V0));
-    const d1 = -dot(N1, V0);
+    const d1 = -dot(N1, V0), e1 = REL_EPS * len3(N1) * size;
     let du0 = dot(N1, U0) + d1, du1 = dot(N1, U1) + d1, du2 = dot(N1, U2) + d1;
-    if (Math.abs(du0) < EPS) du0 = 0; if (Math.abs(du1) < EPS) du1 = 0; if (Math.abs(du2) < EPS) du2 = 0;
+    if (Math.abs(du0) < e1) du0 = 0; if (Math.abs(du1) < e1) du1 = 0; if (Math.abs(du2) < e1) du2 = 0;
     const du0du1 = du0 * du1, du0du2 = du0 * du2;
     if (du0du1 > 0 && du0du2 > 0) return false;
     const N2 = cross(sub(U1, U0), sub(U2, U0));
-    const d2 = -dot(N2, U0);
+    const d2 = -dot(N2, U0), e2 = REL_EPS * len3(N2) * size;
     let dv0 = dot(N2, V0) + d2, dv1 = dot(N2, V1) + d2, dv2 = dot(N2, V2) + d2;
-    if (Math.abs(dv0) < EPS) dv0 = 0; if (Math.abs(dv1) < EPS) dv1 = 0; if (Math.abs(dv2) < EPS) dv2 = 0;
+    if (Math.abs(dv0) < e2) dv0 = 0; if (Math.abs(dv1) < e2) dv1 = 0; if (Math.abs(dv2) < e2) dv2 = 0;
     const dv0dv1 = dv0 * dv1, dv0dv2 = dv0 * dv2;
     if (dv0dv1 > 0 && dv0dv2 > 0) return false;
     const D = cross(N1, N2);

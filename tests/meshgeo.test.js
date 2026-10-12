@@ -61,3 +61,22 @@ test("meshBounds recomputes after invalidateSub", () => {
   assert.strictEqual(MeshGeo.meshBounds(cube).min[0], -1);
   assert.strictEqual(cube._grid, null);
 });
+
+// Real-data finding (sample model, 0.005 mm sub-triangles at |coord| ~ 33 mm):
+// an ABSOLUTE plane-distance epsilon on unnormalised normals snapped two
+// near-parallel, laterally separated tiny triangles onto each other's planes,
+// and the coplanar-ish interval test then reported a crossing.
+test("triTriIntersect: tiny near-parallel separated triangles are not an intersection (scale-relative epsilon)", () => {
+  const { MeshGeo } = loadModules();
+  const A = [[8.561429589986801, -33.660544633865356, 4.68804844468832], [8.565399885177612, -33.66306161880493, 4.692375004291534], [8.55706238746643, -33.660186767578125, 4.691412508487701]];
+  const B = [[8.558993577957153, -33.665942668914795, 4.7087187469005585], [8.554506063461304, -33.666424036026, 4.714968740940094], [8.554824829101562, -33.66450524330139, 4.708237498998642]];
+  // their y-ranges do not even overlap
+  assert.ok(Math.max(...B.map((p) => p[1])) < Math.min(...A.map((p) => p[1])));
+  assert.strictEqual(MeshGeo.triTriIntersect(...A, ...B), false);
+  // the same configuration scaled down 1000x around the origin stays a non-intersection
+  const s = (T) => T.map((p) => p.map((x) => x * 1e-3));
+  assert.strictEqual(MeshGeo.triTriIntersect(...s(A), ...s(B)), false);
+  // and a genuine crossing at that tiny scale is still found
+  const C = [[0, 0, 0], [2e-3, 0, 0], [0, 2e-3, 0]], E = [[5e-4, 5e-4, -1e-3], [5e-4, 5e-4, 1e-3], [1e-3, 1e-3, 1e-3]];
+  assert.strictEqual(MeshGeo.triTriIntersect(...C, ...E), true);
+});
