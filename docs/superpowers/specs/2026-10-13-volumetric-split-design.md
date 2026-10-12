@@ -114,15 +114,21 @@ paint string per triangle). Wall and bottom: the part's state in the part;
   Möller; non-adjacent pairs only). On any intersection: halve every `t_i`
   and rebuild wall + bottom, up to 4 times; final fallback `t_i = 0`
   (today's lens) with toast *"Region too sharp for a plug — made a shell"*.
-  (The crossing case is a **convex** ridge: inward normals on both sides of a
-  sharp feature converge below it; the half-thickness clamp alone does not
-  prevent the offset segments from crossing there.)
+  (In practice the clamp and the `|cos θ|` weight keep walls apart on convex
+  features — a band over a ridge yields a clean plug with no halving, and a
+  through-groove yields a trough-shaped plug because Liepa follows the
+  offset end paths. The case that does trigger halving is a **closed pocket**
+  (a dent): its rim is planar, so the bottom cap is flat and must cross the
+  pocket walls; halving runs to the shell, and the shell closes the AIR, which
+  the volume gate below refuses.)
 - **Watertight gate** on both outputs: every undirected edge used exactly
-  twice **and** traversed once in each direction (the harness's
-  `directedViolations` logic moves into `Split.checkClosed(mesh)` so app and
-  tests share it). If either output fails, nothing is applied; toast
-  *"Couldn't make a clean solid here"*. The existing
-  `console.warn("cap may be incomplete")` paths become refusals.
+  twice **and** traversed once in each direction (`MeshGeo.checkClosed`),
+  **and** positive signed volume (`MeshGeo.signedVolume > 0`, which rejects
+  inside-out shells of pocket-shaped regions). If either output fails,
+  nothing is applied; toast *"Couldn't make a clean solid here (pocket-shaped
+  or too sharp region)"*; the error result carries `info` so the halving
+  outcome stays observable. The existing `console.warn("cap may be
+  incomplete")` paths become refusals.
 - **Refusals** (`{ error }`): pinch topology (`pinch`) → *"Region touches
   itself at a point — paint a wider bridge or gap"*; `subs` covers the whole
   mesh → *"That's the whole object"*; empty region → *"Nothing to split
@@ -184,9 +190,13 @@ Snapshots already store `meshList` + `synthetic` (plane cut needs it).
   at `z ≥ 0.25` (half thickness), volumes sum, no intersections.
 - **Knife-edge factor:** cube region = top face + upper half of the four
   sides (cross-section rim at z=1) → zero wall triangles; part = lens.
-- **Convex-ridge fallback:** gridded roof prism, region = upper half of both
-  slopes → `plugSolids` returns after ≥1 halving, outputs closed, volumes
-  sum.
+- **Convex ridge stays clean:** gridded roof prism, region = upper half of
+  both slopes → no halving, outputs closed, volumes sum to 12.
+- **Through-groove:** U-channel, region = groove walls + floor → trough plug,
+  no halving, closed, volumes sum to 48.
+- **Closed pocket refused:** pocket box, region = pocket walls + floor →
+  halving runs to the shell (`info.halvings === 4`, `info.shell === true`)
+  and the inside-out result is refused by the volume gate.
 - **Refusals:** pinch (two regions sharing one vertex) → `error`; whole
   mesh → `error`; empty → `error`.
 - **Chained:** cube: split region A (top), then on the remainder split the
