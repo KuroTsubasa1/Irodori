@@ -71,6 +71,7 @@ body {
 .opt[hidden] { display: none; }
 .optlabel { font-size: 12.5px; font-weight: 600; color: var(--muted); }
 .opt input[type="range"] { width: 190px; }
+.opt[data-panel="ring"] input[type="range"] { width: 110px; } /* 3 sliders + axis/apply must fit one row */
 .slim { flex: 0 0 auto; width: auto; padding: 8px 13px; }
 .sizedot {
   display: inline-block; width: 14px; height: 14px; border-radius: 50%;

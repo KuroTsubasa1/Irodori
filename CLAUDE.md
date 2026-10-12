@@ -14,7 +14,7 @@ graph. Keep it that way (no bundler/ESM migration).
   modules and produces phantom "X is not a function" errors.
 - **Tests:** `npm test` (= `node --test`). Node's built-in runner;
   `tests/harness.js` loads the browser IIFEs into a `vm` sandbox (with
-  vendored three.js + poly2tri) and returns the globals. 52 tests.
+  vendored three.js + poly2tri) and returns the globals. 99 tests.
 
 ## Hard rules
 

@@ -199,18 +199,6 @@
     return Int32Array.from(out);
   }
 
-  // Band of connected sub-triangles within +/- half along an arbitrary axis.
-  function selectBandAxis(mesh, seedSub, half, ax, ay, az) {
-    const g = Cleanup.buildSubGraph(mesh);
-    const cen = g.cen;
-    const sx = cen[seedSub * 3], sy = cen[seedSub * 3 + 1], sz = cen[seedSub * 3 + 2];
-    const inBand = (i) => {
-      const dx = cen[i * 3] - sx, dy = cen[i * 3 + 1] - sy, dz = cen[i * 3 + 2] - sz;
-      return Math.abs(dx * ax + dy * ay + dz * az) <= half;
-    };
-    return floodAccept(g, seedSub, inBand);
-  }
-
   // Flood the connected same-color region containing seedSub. Returns the
   // member sub-triangle indices (Int32Array).
   // Optional `exclude` Set: sub-triangle indices that are never flooded into.
@@ -362,7 +350,6 @@
   Object.assign(Cleanup, {
     selectRadius,
     selectBand,
-    selectBandAxis,
     selectColorRegion,
     selectSmartFaces,
     facesToSubs,
