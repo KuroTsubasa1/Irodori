@@ -319,4 +319,31 @@ function makeUChannel(len) {
   return { nf: v1.length, positions: new Float32Array(pos), v1: Int32Array.from(v1), v2: Int32Array.from(v2), v3: Int32Array.from(v3), paints: v1.map(() => ""), edge };
 }
 
-module.exports = { makeUChannel, makeGridBox, makeRoofPrism, loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeClosedCube, makeBentStrip, makeBigTriangle, directedViolations, signedVolume };
+// Box [0,4]^3 with a 2x2x2 pocket open at the top (x,y in [1,3], z in [2,4]).
+// Top is an annulus of 4 quads, so no T-junctions. Outward-wound.
+// mesh.side[f] in bottom|front|back|left|right|top|wall|floor. Volume 56, nf 28.
+function makePocketBox() {
+  const pos = [], key = new Map(), v1 = [], v2 = [], v3 = [], side = [];
+  const P = (x, y, z) => {
+    const k = x + "," + y + "," + z;
+    let i = key.get(k);
+    if (i === undefined) { i = pos.length / 3; key.set(k, i); pos.push(x, y, z); }
+    return i;
+  };
+  const quad = (a, b, c, d, name) => { v1.push(a, a); v2.push(b, c); v3.push(c, d); side.push(name, name); }; // (a,b,c),(a,c,d)
+  quad(P(0, 0, 0), P(0, 4, 0), P(4, 4, 0), P(4, 0, 0), "bottom");
+  quad(P(0, 0, 0), P(4, 0, 0), P(4, 0, 4), P(0, 0, 4), "front");
+  quad(P(4, 4, 0), P(0, 4, 0), P(0, 4, 4), P(4, 4, 4), "back");
+  quad(P(0, 4, 0), P(0, 0, 0), P(0, 0, 4), P(0, 4, 4), "left");
+  quad(P(4, 0, 0), P(4, 4, 0), P(4, 4, 4), P(4, 0, 4), "right");
+  const O = [[0, 0], [4, 0], [4, 4], [0, 4]], I = [[1, 1], [3, 1], [3, 3], [1, 3]];
+  for (let i = 0; i < 4; i++) {
+    const j = (i + 1) % 4;
+    quad(P(O[i][0], O[i][1], 4), P(O[j][0], O[j][1], 4), P(I[j][0], I[j][1], 4), P(I[i][0], I[i][1], 4), "top");   // +z annulus
+    quad(P(I[i][0], I[i][1], 4), P(I[j][0], I[j][1], 4), P(I[j][0], I[j][1], 2), P(I[i][0], I[i][1], 2), "wall"); // faces into the pocket air
+  }
+  quad(P(1, 1, 2), P(3, 1, 2), P(3, 3, 2), P(1, 3, 2), "floor"); // +z, air above
+  return { nf: v1.length, positions: new Float32Array(pos), v1: Int32Array.from(v1), v2: Int32Array.from(v2), v3: Int32Array.from(v3), paints: v1.map(() => ""), side };
+}
+
+module.exports = { makePocketBox, makeUChannel, makeGridBox, makeRoofPrism, loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeClosedCube, makeBentStrip, makeBigTriangle, directedViolations, signedVolume };

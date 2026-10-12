@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { loadModules, makeGridBox, makeRoofPrism, makeUChannel, makeBentStrip, signedVolume } = require("./harness");
+const { loadModules, makeGridBox, makeRoofPrism, makeUChannel, makePocketBox, makeBentStrip, signedVolume } = require("./harness");
 
 const flat = (m) => { const I = []; for (let f = 0; f < m.nf; f++) I.push(m.v1[f], m.v2[f], m.v3[f]); return I; };
 const vol = (m) => signedVolume(flat(m), m.positions);
@@ -31,6 +31,10 @@ test("fixtures: grid box and roof prism are closed with the expected volume", ()
   const u = makeUChannel(4);
   assert.strictEqual(MeshGeo.checkClosed(u), 0);
   assert.ok(Math.abs(vol(u) - 48) < 1e-6, "u-channel volume " + vol(u));
+  const pk = makePocketBox();
+  assert.strictEqual(MeshGeo.checkClosed(pk), 0);
+  assert.ok(Math.abs(vol(pk) - 56) < 1e-6, "pocket box volume " + vol(pk));
+  assert.strictEqual(pk.nf, 28);
   assert.strictEqual(box.nf, 6 * 16 * 2);
   assert.strictEqual(roof.nf, 8 * 16);
 });
@@ -175,10 +179,22 @@ test("plugSolids: band over a convex ridge stays clean (clamp + cos weight keep 
   assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 12) < 1e-6);
 });
 
-test("plugSolids: a pocket-shaped region (groove) runs halving to the shell and is refused as inside-out", () => {
-  const { Cleanup, Split } = loadModules();
+test("plugSolids: a through-groove gets a trough plug that follows the groove", () => {
+  const { Cleanup, Split, MeshGeo } = loadModules();
   const m = makeUChannel(4);
   for (let f = 0; f < m.nf; f++) if (m.edge[f] === 4 || m.edge[f] === 5 || m.edge[f] === 6) m.paints[f] = "4"; // groove walls + floor
+  const r = Split.plugSolids(m, regionOf(Cleanup, m, 1), { depth: 5 });
+  assert.ok(!r.error, r.error);
+  assert.strictEqual(r.info.halvings, 0);
+  closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
+  assert.ok(vol(r.part) > 0);
+  assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 48) < 1e-6);
+});
+
+test("plugSolids: a closed pocket region runs halving to the shell and is refused as inside-out", () => {
+  const { Cleanup, Split } = loadModules();
+  const m = makePocketBox();
+  for (let f = 0; f < m.nf; f++) if (m.side[f] === "wall" || m.side[f] === "floor") m.paints[f] = "4";
   const r = Split.plugSolids(m, regionOf(Cleanup, m, 1), { depth: 5 });
   assert.match(r.error, /clean solid/);
   assert.strictEqual(r.info.shell, true);
