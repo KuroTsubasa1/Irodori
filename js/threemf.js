@@ -150,7 +150,7 @@
 
   // Assemble a generated package (fresh zip) around buildSplitXML objects:
   // preserved files copied (project settings normalized), generated model/
-  // settings files written. Shared by exportSplit and exportGenerated.
+  // settings files written. Used by exportGenerated.
   async function assembleGeneratedPackage(doc, objects) {
     let bt = "1 0 0 0 1 0 0 0 1 125 125 0";
     const rootTxt = await readText(doc.zip, /3dmodel\.model$/i);
@@ -190,58 +190,13 @@
     });
   }
 
-  // Build a split .3mf: each split part + the painted remainder become separate
-  // top-level objects, coincident at the original build transform.
-  // splitParts: [{ meshIndex, subs:Int32Array|number[], state, method }]
-  async function exportSplit(doc, splitParts) {
-    const claimed = doc.meshes.map(() => new Set());
-    for (const p of splitParts)
-      for (const s of p.subs) claimed[p.meshIndex].add(s);
-
-    const extruderFor = (st) => (st === 0 ? doc.defaultExtruder : st);
-    const nameFor = (st) => "Filament " + extruderFor(st);
-    const objects = [];
-
-    // split parts -> uniform-color solids, capped with each part's chosen method.
-    // Caps are freshly computed and kept locally so the remainder reuses the
-    // CURRENT cap (never a stale one) without mutating the caller's splitParts.
-    const partCaps = [];
-    for (let pi = 0; pi < splitParts.length; pi++) {
-      const p = splitParts[pi];
-      const g = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "liepa");
-      partCaps[pi] = g.cap;
-      objects.push({
-        name: nameFor(p.state), extruder: extruderFor(p.state),
-        positions: g.positions, indices: g.indices, triState: null,
-      });
-    }
-    // remaining per mesh -> painted, hole-capped solid (reuses parts' reversed caps)
-    for (let mi = 0; mi < doc.meshes.length; mi++) {
-      const partsHere = [];
-      for (let pi = 0; pi < splitParts.length; pi++) {
-        const p = splitParts[pi];
-        if (p.meshIndex === mi) partsHere.push({ subs: Array.from(p.subs), cap: partCaps[pi], state: p.state });
-      }
-      if (!partsHere.length && !claimed[mi].size) continue;
-      const g = Split.remainderSolid(doc.meshes[mi], partsHere, claimed[mi]);
-      if (!g.indices.length) continue;
-      objects.push({
-        name: "Remaining", extruder: doc.defaultExtruder,
-        positions: g.positions, indices: g.indices, triState: g.triState,
-      });
-    }
-    if (!objects.length) throw new Error("Nothing to export");
-
-    return assembleGeneratedPackage(doc, objects);
-  }
-
   // Export a document whose geometry no longer matches the source files (plane
   // cuts): every mesh becomes a generated object carrying its full paint.
   async function exportGenerated(doc) {
     const objects = doc.meshes.map((m, i) => {
       const I = new Uint32Array(m.nf * 3);
       for (let f = 0; f < m.nf; f++) { I[f * 3] = m.v1[f]; I[f * 3 + 1] = m.v2[f]; I[f * 3 + 2] = m.v3[f]; }
-      return { name: "Object " + (i + 1), extruder: doc.defaultExtruder, positions: m.positions, indices: I, triState: null, paints: m.paints };
+      return { name: m.part ? m.part.label : "Object " + (i + 1), extruder: doc.defaultExtruder, positions: m.positions, indices: I, triState: null, paints: m.paints };
     });
     return assembleGeneratedPackage(doc, objects);
   }
@@ -277,5 +232,5 @@
     return JSON.stringify(j);
   }
 
-  global.ThreeMF = { load, exportZip, exportSplit, exportGenerated, extendFilamentConfig, normalizeFilamentConfig, parseMeshes, rebuildModelFile };
+  global.ThreeMF = { load, exportZip, exportGenerated, extendFilamentConfig, normalizeFilamentConfig, parseMeshes, rebuildModelFile };
 })(window);

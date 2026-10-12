@@ -1,4 +1,4 @@
-// Regression test for assembleGeneratedPackage (exportSplit / exportGenerated).
+// Regression test for assembleGeneratedPackage (exportGenerated).
 //
 // The generated package writes geometry to a FIXED path
 // (3D/Objects/object_1.model) and references it from 3dmodel.model via a

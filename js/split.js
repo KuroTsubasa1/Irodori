@@ -1,142 +1,6 @@
-/* split.js — build watertight solids from sets of leaf sub-triangles, and
- * assemble a multi-object .3mf. Depends on Paint + Cleanup (on window). */
+/* split.js — volumetric split (plugSolids: region → solid plug + pocketed remainder), row layout, and the multi-object .3mf XML. Depends on Paint + Cleanup + Caps + MeshGeo (on window). */
 (function (global) {
   "use strict";
-
-  // Build a capped watertight solid from leaf sub-triangle indices (indices into
-  // the mesh's buildSubGraph enumeration).
-  // Returns { positions:Float32Array, indices:Uint32Array, triState:Int32Array, state }.
-  function solidFromSubs(mesh, subs, method) {
-    method = method || "centroid";
-    const g = Cleanup.buildSubGraph(mesh);
-    const { sv, vx, vy, vz, subLeaf, midOf } = g;
-
-    // local vertex remap: global welded id -> local id
-    const remap = new Map();
-    const px = [], py = [], pz = [];
-    const lid = (gid) => {
-      let id = remap.get(gid);
-      if (id === undefined) {
-        id = px.length; remap.set(gid, id);
-        px.push(vx[gid]); py.push(vy[gid]); pz.push(vz[gid]);
-      }
-      return id;
-    };
-
-    function decompose(u, v) {
-      const m = midOf ? midOf(u, v) : -1;
-      if (m >= 0 && m !== u && m !== v) {
-        return decompose(u, m).concat(decompose(m, v).slice(1));
-      }
-      return [u, v];
-    }
-
-    const F = [], triSt = [];          // local surface triangles + per-tri state
-    const bEdge = new Map();           // global-edge key -> { u, v, count }
-    const ekeyG = (a, b) => (a < b ? a + "_" + b : b + "_" + a);
-    const addPerim = (u, v) => {
-      const k = ekeyG(u, v);
-      const e = bEdge.get(k);
-      if (e) e.count++;
-      else bEdge.set(k, { u, v, count: 1 }); // direction from first (owning) tri
-    };
-
-    for (let k = 0; k < subs.length; k++) {
-      const s = subs[k];
-      const a = sv[s * 3], b = sv[s * 3 + 1], c = sv[s * 3 + 2];
-      const st = subLeaf[s].state;
-      const eab = decompose(a, b), ebc = decompose(b, c), eca = decompose(c, a);
-      const poly = eab.concat(ebc.slice(1), eca.slice(1, -1)); // conformed, CCW
-      // perimeter edges (global) for boundary detection
-      for (let i = 0; i < poly.length; i++) addPerim(poly[i], poly[(i + 1) % poly.length]);
-      if (poly.length === 3) {
-        F.push(lid(poly[0]), lid(poly[1]), lid(poly[2]));
-        triSt.push(st);
-      } else {
-        // fan from the polygon centroid (interior point; never collinear)
-        let gx = 0, gy = 0, gz = 0;
-        for (const gid of poly) { gx += vx[gid]; gy += vy[gid]; gz += vz[gid]; }
-        const nP = poly.length, gLocal = px.length;
-        px.push(gx / nP); py.push(gy / nP); pz.push(gz / nP);
-        for (let i = 0; i < nP; i++) {
-          F.push(gLocal, lid(poly[i]), lid(poly[(i + 1) % nP]));
-          triSt.push(st);
-        }
-      }
-    }
-
-    const out = F.slice(), outSt = triSt.slice();
-
-    // boundary edges (used once); rebuild directed adjacency by walking the cycle
-    // so that edges chain head-to-tail for extractLoops (bEdge stores first-seen
-    // direction which can be inconsistent across polygons).
-    const bndAdj = new Map();  // vertex -> [neighbor, ...]  (undirected)
-    for (const e of bEdge.values()) {
-      if (e.count !== 1) continue;
-      if (!bndAdj.has(e.u)) bndAdj.set(e.u, []);
-      if (!bndAdj.has(e.v)) bndAdj.set(e.v, []);
-      bndAdj.get(e.u).push(e.v);
-      bndAdj.get(e.v).push(e.u);
-    }
-    const boundary = [];
-    const bndVisited = new Set();
-    let bndEdgeCount = 0;
-    for (const e of bEdge.values()) { if (e.count === 1) bndEdgeCount++; }
-    let consumedEdgeCount = 0;
-    let boundaryFullyClosed = true;
-    for (const start of bndAdj.keys()) {
-      if (bndVisited.has(start)) continue;
-      const loop = [start]; bndVisited.add(start);
-      let cur = start;
-      while (true) {
-        const next = (bndAdj.get(cur) || []).find(n => !bndVisited.has(n));
-        if (next === undefined) break;
-        bndVisited.add(next); loop.push(next); cur = next;
-      }
-      // check that the chain closed back to its start (last vertex rejoins start)
-      const closes = (bndAdj.get(cur) || []).includes(start);
-      if (!closes) boundaryFullyClosed = false;
-      if (loop.length >= 3) {
-        consumedEdgeCount += loop.length;
-        for (let i = 0; i < loop.length; i++) boundary.push([loop[i], loop[(i + 1) % loop.length]]);
-      }
-    }
-    if (!boundaryFullyClosed || consumedEdgeCount !== bndEdgeCount) {
-      console.warn("solidFromSubs: boundary not fully closed (pinch topology); cap may be incomplete");
-    }
-
-    let cap = { verts: [], extraPts: [], tris: [], method };
-    if (boundary.length) {
-      // the walk above already ordered the boundary into consistent directed cycles; extractLoops groups them into per-loop vertex arrays
-      const loops = Caps.extractLoops(boundary);
-      const getPt = (gid) => [vx[gid], vy[gid], vz[gid]];
-      cap = Caps.triangulateLoops(loops, getPt, method);
-      cap.method = method;
-      // orient each cap COMPONENT exactly against the surface's boundary
-      // winding (replaces the global best-fit-plane heuristic, which inverted
-      // caps on multi-loop parts whose rims face opposite directions)
-      const surfDir = new Map();
-      for (const e of bEdge.values()) if (e.count === 1) surfDir.set(ekeyG(e.u, e.v), e.u + ">" + e.v);
-      orientCapComponents(cap, surfDir);
-      // emit the cap into the part: loop verts weld via lid(); extras append locally
-      const capLocal = cap.verts.map((gid) => lid(gid));
-      const extraBase = px.length;
-      for (const ep of cap.extraPts) { px.push(ep[0]); py.push(ep[1]); pz.push(ep[2]); }
-      const refLocal = (i) => (i < cap.verts.length ? capLocal[i] : extraBase + (i - cap.verts.length));
-      const capState = subs.length ? subLeaf[subs[0]].state : 0;
-      for (const [a, b, c] of cap.tris) { out.push(refLocal(a), refLocal(b), refLocal(c)); outSt.push(capState); }
-    }
-
-    const positions = new Float32Array(px.length * 3);
-    for (let i = 0; i < px.length; i++) { positions[i * 3] = px[i]; positions[i * 3 + 1] = py[i]; positions[i * 3 + 2] = pz[i]; }
-    return {
-      positions,
-      indices: Uint32Array.from(out),
-      triState: Int32Array.from(outSt),
-      state: subs.length ? subLeaf[subs[0]].state : 0,
-      cap, // { verts:globalVids, extraPts, tris (part-outward), method }
-    };
-  }
 
   // Exact cap orientation: an orientable closed solid traverses every rim edge
   // once in each direction, and the SURFACE's direction is known (bEdge
@@ -176,7 +40,7 @@
     for (const root of new Set([...agree.keys(), ...oppose.keys()])) {
       const a = agree.get(root) || 0, o = oppose.get(root) || 0;
       if (a > o) flip.add(root);
-      else if (a === o && a > 0) console.warn("solidFromSubs: ambiguous cap orientation; leaving component as-is");
+      else if (a === o && a > 0) console.warn("plugSolids: ambiguous cap orientation; leaving component as-is");
     }
     if (flip.size) cap.tris.forEach((t, ti) => { if (flip.has(find(ti))) { const tmp = t[1]; t[1] = t[2]; t[2] = tmp; } });
   }
@@ -262,39 +126,6 @@
       });
     }
     return { dir, t };
-  }
-
-  // Build the remaining mesh (sub-triangles NOT in any part) as a watertight
-  // solid: its conformed surface + every part's cap, reversed, each coloured the
-  // loop's majority bordering color. parts: [{ subs, cap, state }]; claimed: Set.
-  function remainderSolid(mesh, parts, claimed) {
-    const g = Cleanup.buildSubGraph(mesh);
-    const rem = [];
-    for (let s = 0; s < g.NS; s++) if (!claimed.has(s)) rem.push(s);
-    // open (uncapped) conformed surface of the remainder; we add the parts' caps
-    const surf = openSurface(mesh, rem, g);
-    const px = surf.px, py = surf.py, pz = surf.pz;
-    const out = surf.F, outSt = surf.triSt;
-    const lidG = surf.lid; // global vid -> local (creates from welded coords)
-
-    for (const part of parts) {
-      const cap = part.cap;
-      // cap.verts are global welded ids on the part boundary, which is also the
-      // remainder boundary, so lidG welds them onto existing remainder vertices
-      // (a coincident duplicate is only created for degenerate non-manifold input).
-      const capLocal = cap.verts.map((gid) => lidG(gid));
-      const extraBase = px.length;
-      for (const ep of cap.extraPts) { px.push(ep[0]); py.push(ep[1]); pz.push(ep[2]); }
-      const refLocal = (i) => (i < cap.verts.length ? capLocal[i] : extraBase + (i - cap.verts.length));
-      const col = majorityBorderColor(mesh, g, part);
-      for (const [a, b, c] of cap.tris) {
-        out.push(refLocal(a), refLocal(c), refLocal(b)); // reversed winding
-        outSt.push(col);
-      }
-    }
-    const positions = new Float32Array(px.length * 3);
-    for (let i = 0; i < px.length; i++) { positions[i * 3] = px[i]; positions[i * 3 + 1] = py[i]; positions[i * 3 + 2] = pz[i]; }
-    return { positions, indices: Uint32Array.from(out), triState: Int32Array.from(outSt) };
   }
 
   // Conformed open surface (no cap) for a set of subs. Returns growable local
@@ -588,5 +419,5 @@
     return { objectsModel, rootModel, modelSettings };
   }
 
-  global.Split = { solidFromSubs, remainderSolid, patchBoundary, rimNormals, rimFrame, plugSolids, majorityBorderColor, buildSplitXML, uuid, layoutParts };
+global.Split = { plugSolids, patchBoundary, rimNormals, rimFrame, buildSplitXML, uuid, layoutParts };
 })(window);
