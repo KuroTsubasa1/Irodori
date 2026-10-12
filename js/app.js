@@ -24,19 +24,8 @@
   let lastHit = null; // last hovered surface hit (for live cursor)
   let previewCache = null; // { tool, meshIndex, members:Set<localSub>, globalSubs, subs }
   function clearHoverPreview() { if (previewCache) { Viewer.clearPreview(); previewCache = null; } }
-  let splitParts = []; // [{ meshIndex, subs:Int32Array, state, method }]
-  let splitSeq = 0; // stable id per split part (for animation carry-over)
-  let isolated = null; // { kind:"mesh", index } | { kind:"part", id } | null
-  const claimedByMesh = () => {
-    const sets = doc.meshes.map(() => new Set());
-    for (const p of splitParts) for (const s of p.subs) sets[p.meshIndex].add(s);
-    return sets;
-  };
-  function rebuildView(highlightSet) {
-    Viewer.build(doc, claimedByMesh());
-    Viewer.setSplitParts(splitParts);
-    if (highlightSet) Viewer.setHighlight(highlightSet);
-  }
+  let isolated = null; // { kind:"mesh", index } | null
+  function rebuildView(highlightSet) { Viewer.build(doc); if (highlightSet) Viewer.setHighlight(highlightSet); }
 
   // island-size control (log slider + number)
   const SIZE_MAX = 50000;
@@ -48,7 +37,6 @@
   function snap() {
     return {
       meshes: doc.meshes.map((m) => ({ paints: m.paints.slice(), dom: Int32Array.from(m.dom) })),
-      splits: splitParts.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method })),
       filaments: doc.filaments.map((f) => ({ index: f.index, hex: f.hex })),
       meshList: doc.meshes.slice(),
       synthetic: !!doc.synthetic,
@@ -63,7 +51,6 @@
       Cleanup.invalidateSub(m);
     });
     if (state.filaments) doc.filaments = state.filaments.map((f) => ({ index: f.index, hex: f.hex }));
-    splitParts = state.splits.map((p) => ({ id: p.id, meshIndex: p.meshIndex, subs: Int32Array.from(p.subs), state: p.state, method: p.method }));
   }
   const current = () => history[histIndex].state;
   function pushHistory(label, stateClone) {
@@ -133,6 +120,7 @@
     }
     modelSize = Math.hypot(d - a, e - b, f - c) || 100;
     modelBBox = { lo: [a, b, c], hi: [d, e, f] };
+    $("splitDepth").max = (modelSize / 2).toFixed(1);
   }
   const brushRadius = () => { const t = (+$("brushSize").value) / 100; return modelSize * (0.0015 + 0.06 * t * t); };
   const ringHalf = () => { const t = (+$("ringThick").value) / 100; return modelSize * (0.001 + 0.04 * t * t); };
@@ -144,12 +132,11 @@
       fileName = file.name;
       doc = await ThreeMF.load(await file.arrayBuffer());
       if (!doc.meshes.length) { toast("No mesh found in this .3mf", true); return; }
-      splitParts = [];
       isolated = null;
       pendingDecal = null;
+      partSeq = 0;
       cancelRing();
       Viewer.setVisibleMeshes(null);
-      Viewer.setPartVisibility(null);
       for (const m of doc.meshes) Cleanup.computeDominant(m);
       computeModelSize();
       render(null);
@@ -245,9 +232,6 @@
     busy("Removing color…", () => {
       const mapFn = (s) => (s === k ? 0 : s > k ? s - 1 : s);
       for (const m of doc.meshes) Cleanup.remapStates(m, mapFn);
-      // split parts carry their own state — remap those too, or a part painted
-      // with the deleted/shifted colour keeps a stale extruder index
-      splitParts = splitParts.map((p) => ({ ...p, state: mapFn(p.state) }));
       doc.filaments.splice(k - 1, 1);
       doc.filaments.forEach((f, i) => (f.index = i + 1));
       pushHistory("Delete color");
@@ -265,38 +249,21 @@
     doc.meshes.forEach((m, i) => {
       const li = document.createElement("li");
       li.className = "objrow";
-      const nm = document.createElement("span"); nm.className = "fname"; nm.textContent = "Object " + (i + 1);
+      const nm = document.createElement("span"); nm.className = "fname"; nm.textContent = (m.part ? m.part.label : "Object " + (i + 1));
       const ct = document.createElement("span"); ct.className = "fcount"; ct.textContent = m.nf.toLocaleString();
       nm.addEventListener("click", () => isolate({ kind: "mesh", index: i }));
       ct.addEventListener("click", () => isolate({ kind: "mesh", index: i }));
+      if (m.part) { const sw = document.createElement("span"); sw.className = "swatch"; sw.style.background = stateColor(m.part.state); li.append(sw); }
       li.append(nm, ct);
-      ul.appendChild(li);
-    });
-    splitParts.forEach((p) => {
-      const li = document.createElement("li");
-      li.className = "objrow";
-      const sw = document.createElement("span"); sw.className = "swatch"; sw.style.background = stateColor(p.state);
-      const nm = document.createElement("span"); nm.className = "fname"; nm.textContent = colorName(p.state) + " part";
-      nm.addEventListener("click", () => isolate({ kind: "part", id: p.id }));
-      li.append(sw, nm);
       ul.appendChild(li);
     });
     $("showAllBtn").hidden = !isolated;
   }
   function isolate(target) {
     isolated = target;
-    if (target.kind === "mesh") {
-      Viewer.setVisibleMeshes(new Set([target.index]));
-      render(null);                       // rebuild with only this mesh
-      Viewer.setMainVisible(true);
-      Viewer.setPartVisibility(new Set()); // hide all split parts
-      Viewer.frame();                      // recenter on the built geometry
-    } else { // kind === "part" — view-only: hide the main mesh, show+pin the part
-      Viewer.setMainVisible(false);
-      Viewer.setPartVisibility(new Set([target.id]));
-      Viewer.pinPart(target.id);           // park it at origin (no explode)
-      Viewer.frame(Viewer.partObject(target.id));
-    }
+    Viewer.setVisibleMeshes(new Set([target.index]));
+    render(null);                       // rebuild with only this mesh
+    Viewer.frame();                      // recenter on the built geometry
     buildObjects();
   }
   function showAll() {
@@ -304,7 +271,6 @@
     Viewer.setVisibleMeshes(null);
     render(null);
     Viewer.setMainVisible(true);
-    Viewer.setPartVisibility(null);
     Viewer.frame();
     buildObjects();
   }
@@ -339,6 +305,7 @@
     if (name !== "stamp" && typeof cancelStamp === "function") cancelStamp();
     if (name !== "ring" && typeof cancelRing === "function") cancelRing();
     if (name !== "split" && name !== "ring" && name !== "fill") clearHoverPreview();
+    if (Viewer.setLayout(name !== "cut") && doc) render(null);
     if (name === "cut") updateCutPlane(); else Viewer.setCutPlane(null);
     if (doc && (paintTool || name === "split")) ensureSubGraphs("Preparing tool…");
     updateSizeDots();
@@ -495,7 +462,8 @@
       }
       r = Math.sqrt(r2) * 1.3 || r;
     } else { mx = c[0]; my = c[1]; mz = c[2]; }
-    Viewer.setRingPlanes({ cx: mx, cy: my, cz: mz, nx: n[0], ny: n[1], nz: n[2], h, r });
+    const o = Viewer.meshOffset(src.meshIndex);
+    Viewer.setRingPlanes({ cx: mx + o[0], cy: my + o[1], cz: mz + o[2], nx: n[0], ny: n[1], nz: n[2], h, r });
   }
   // Recompute after an axis/tilt/thickness change.
   function refreshRing() {
@@ -587,13 +555,13 @@
       const m = doc.meshes[hit.meshIndex];
       let subs;
       if (activeTool === "split") {
-        subs = Cleanup.selectColorRegion(m, hit.localSub, claimedByMesh()[hit.meshIndex]);
+        subs = Cleanup.selectColorRegion(m, hit.localSub);
       } else {
         if (fillSmart()) {
           const faces = Cleanup.selectSmartFaces(m, Cleanup.buildSubGraph(m).subFace[hit.localSub], +$("fillAngle").value);
           subs = Cleanup.facesToSubs(m, faces);
         } else {
-          subs = Cleanup.selectColorRegion(m, hit.localSub); // fillRegion's flood (no claimed-exclusion)
+          subs = Cleanup.selectColorRegion(m, hit.localSub); // fillRegion's flood
         }
       }
       if (!subs.length) return;
@@ -607,7 +575,7 @@
     if (!hit) { Viewer.hideCursor(); return; }
     if (activeTool === "brush") {
       const n = hit.normal;
-      Viewer.setCursorTransform(hit.point.x, hit.point.y, hit.point.z, n.x, n.y, n.z, brushRadius());
+      Viewer.setCursorTransform(hit.world.x, hit.world.y, hit.world.z, n.x, n.y, n.z, brushRadius());
     }
   }
   Viewer.onHover(onHover);
@@ -741,18 +709,34 @@
     updateStats();
     toast("Filled " + faces.length.toLocaleString() + " faces");
   }
+  let partSeq = 0;
   function doSplit(hit) {
-    if (previewActive) { restore(current()); previewActive = false; }
+    if (previewActive) clearPreview();
     clearHoverPreview();
-    const m = doc.meshes[hit.meshIndex];
     if (hit.localSub == null) return;
-    const subs = Cleanup.selectColorRegion(m, hit.localSub, claimedByMesh()[hit.meshIndex]);
-    if (!subs.length) { toast("Nothing to split there", true); return; }
-    splitParts.push({ id: splitSeq++, meshIndex: hit.meshIndex, subs, state: hit.state, method: $("capMethod").value });
-    pushHistory("Split");
-    render(null);
-    buildObjects();
-    toast("Split " + subs.length.toLocaleString() + " sub-triangles into a new solid");
+    const mi = hit.meshIndex, m = doc.meshes[mi];
+    const subs = Cleanup.selectColorRegion(m, hit.localSub);
+    const depth = Math.max(0, +$("splitDepth").value || 0);
+    busy("Splitting…", () => {
+      const r = Split.plugSolids(m, subs, { depth, method: $("capMethod").value });
+      if (r.error) { toast(r.error, true); return; }
+      partSeq++;
+      r.part.part = { label: "Part " + partSeq + " · " + colorName(hit.state), state: hit.state };
+      if (m.part) r.remainder.part = m.part; // splitting a part: what's left is still that part
+      doc.meshes.splice(mi, 1, r.remainder, r.part);
+      doc.synthetic = true;
+      for (const mm of [r.remainder, r.part]) { Cleanup.invalidateSub(mm); mm.dom = null; Cleanup.computeDominant(mm); }
+      isolated = null;
+      Viewer.setVisibleMeshes(null);
+      computeModelSize();
+      pushHistory("Split");
+      render(null);
+      Viewer.frame();
+      buildObjects();
+      updateStats();
+      ensureSubGraphs("Preparing tool…");
+      toast(r.info.shell ? "Region too sharp for a plug — made a shell" : "Split out " + r.part.part.label);
+    });
   }
   Viewer.onPick((hit) => {
     if (activeTool === "ring") placeRing(hit);
@@ -786,7 +770,6 @@
   // Apply the cut: clip targets, replace them with the kept halves, one undo step.
   function doCut(keep) {
     if (!doc) return;
-    if (splitParts.length) { toast("Export or undo your split parts before cutting", true); return; }
     if (previewActive) { restore(current()); previewActive = false; }
     clearHoverPreview();
     const plane = cutPlane();
@@ -799,6 +782,7 @@
         const r = PlaneCut.cutMesh(m, plane);
         if (!r.above || !r.below) { out.push(m); return; } // plane missed this mesh
         cutAny = true;
+        if (m.part) { r.above.part = m.part; r.below.part = m.part; }
         if (keep !== "lower") out.push(r.above);
         if (keep !== "upper") out.push(r.below);
       });
@@ -811,7 +795,6 @@
       computeModelSize();
       pushHistory(keep === "both" ? "Plane cut" : "Plane cut (keep " + keep + ")");
       render(null);
-      Viewer.setPartVisibility(null);
       Viewer.frame();
       buildObjects();
       updateStats();
@@ -915,7 +898,7 @@
   function exportBase() { return fileName.replace(/\.3mf$/i, ""); }
   function exportDefaultName(fmt) {
     const base = exportBase();
-    return fmt === "obj" ? base + "_paint.zip" : fmt === "split" ? base + "_split.3mf" : base + "_fixed.3mf";
+    return fmt === "obj" ? base + "_paint.zip" : base + "_fixed.3mf";
   }
   function triggerDownload(blob, name) {
     const a = document.createElement("a");
@@ -926,14 +909,6 @@
     toast("Saved " + name);
   }
 
-  async function doExportSplit(outName) {
-    if (!doc) return;
-    if (!splitParts.length) { toast("Split a region first", true); return; }
-    try {
-      toast("Packing split .3mf …");
-      triggerDownload(await ThreeMF.exportSplit(doc, splitParts), outName);
-    } catch (e) { console.error(e); toast("Split export failed: " + e.message, true); }
-  }
   async function doExportObj(outName, weld) {
     if (!doc) return;
     try {
@@ -962,8 +937,7 @@
   // ---------- export dialog ----------
   function exportDescribe(fmt) {
     if (fmt === "obj") return "Colored mesh as .obj + .mtl, zipped — for other tools.";
-    if (fmt === "split") return "Each painted region as its own watertight solid (" + splitParts.length + " parts).";
-    return "Repaired model, ready to re-slice.";
+    return doc.meshes.length > 1 ? "Repaired model as " + doc.meshes.length + " objects (parts coincident), ready to re-slice." : "Repaired model, ready to re-slice.";
   }
   function selectExportFmt(fmt) {
     document.querySelectorAll("#exportFmt button").forEach((b) => b.classList.toggle("on", b.dataset.fmt === fmt));
@@ -973,10 +947,6 @@
   }
   function openExportDialog() {
     if (!doc) return;
-    const splitChip = document.querySelector('#exportFmt button[data-fmt="split"]');
-    const noParts = splitParts.length === 0;
-    splitChip.disabled = noParts;
-    splitChip.title = noParts ? "Split a region first" : "";
     selectExportFmt("3mf");
     $("exportModal").hidden = false;
     $("exportName").focus();
@@ -988,7 +958,6 @@
     const name = $("exportName").value.trim() || exportDefaultName(fmt);
     closeExportDialog();
     if (fmt === "obj") doExportObj(name, $("exportWeld").checked);
-    else if (fmt === "split") doExportSplit(name);
     else doExport(name);
   }
 
@@ -1052,14 +1021,6 @@
   $("exportCancel").addEventListener("click", closeExportDialog);
   $("exportGo").addEventListener("click", runExport);
   $("exportModal").addEventListener("click", (e) => { if (e.target === $("exportModal")) closeExportDialog(); });
-  $("capMethod").addEventListener("change", () => {
-    if (!doc || !splitParts.length) return;
-    const method = $("capMethod").value;
-    for (const p of splitParts) p.method = method;
-    pushHistory("Cap method: " + method);
-    render(null);
-    toast("Re-capped " + splitParts.length + " part(s) with " + method);
-  });
   $("reframeBtn").addEventListener("click", () => Viewer.frame());
   $("bgToggle").addEventListener("click", () => $("stage").classList.toggle("dark"));
   $("orientBtn").addEventListener("click", (e) => { e.stopPropagation(); $("orientPop").hidden = !$("orientPop").hidden; });

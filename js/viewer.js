@@ -21,10 +21,24 @@
   let totalSub = 0;
   let renderMap = [];    // per mesh: rendered-sub index -> original localSub
   let origToRender = []; // per mesh: Map<original localSub, rendered-sub index>
-  let splitObjs = [];    // [{ mesh, target:THREE.Vector3, cur:THREE.Vector3 }]
-  let remainderCapObjs = []; // separate double-sided meshes that fill split holes
-  let claimedSets = [];  // per mesh: Set<localSub> hidden from the main mesh
   let visibleMeshes = null; // Set<meshIndex> to render, or null = all
+  let meshOffsets = [];      // per mesh: [dx,dy,dz] display offset (parts laid out in a row)
+  let layoutOn = true;       // false while the Cut tool is active: parts shown coincident
+  // Row layout for meshes flagged `part`, beside the union box of the others.
+  function computeOffsets(d) {
+    const boxes = d.meshes.map((m) => MeshGeo.meshBounds(m));
+    let bodyIdx = d.meshes.map((m, i) => (m.part ? -1 : i)).filter((i) => i >= 0);
+    if (!bodyIdx.length) bodyIdx = [0];
+    const body = { min: [Infinity, Infinity, Infinity], max: [-Infinity, -Infinity, -Infinity] };
+    for (const i of bodyIdx) for (let k = 0; k < 3; k++) { body.min[k] = Math.min(body.min[k], boxes[i].min[k]); body.max[k] = Math.max(body.max[k], boxes[i].max[k]); }
+    const partIdx = d.meshes.map((m, i) => (m.part && !bodyIdx.includes(i) ? i : -1)).filter((i) => i >= 0);
+    const margin = 0.06 * Math.hypot(body.max[0] - body.min[0], body.max[1] - body.min[1], body.max[2] - body.min[2]);
+    const offs = layoutOn ? Split.layoutParts(body, partIdx.map((i) => boxes[i]), margin) : partIdx.map(() => [0, 0, 0]);
+    meshOffsets = d.meshes.map(() => [0, 0, 0]);
+    partIdx.forEach((i, k) => { meshOffsets[i] = offs[k]; });
+  }
+  function meshOffset(mi) { return meshOffsets[mi] || [0, 0, 0]; }
+  function setLayout(on) { const changed = layoutOn !== !!on; layoutOn = !!on; return changed; }
 
   // picking
   let raycaster, mouse;
@@ -186,8 +200,8 @@
     paintCb = handlers;
   }
   // Map an original (graph) sub index to its rendered slot. Returns -1 when the
-  // sub is claimed by a split part (not present in the main mesh), so callers
-  // that recolor live (paintSubs) skip it.
+  // sub is not rendered (its mesh is hidden), so callers that recolor live
+  // (paintSubs) skip it.
   function toGlobalSub(meshIndex, localSub) {
     const map = origToRender[meshIndex];
     if (!map) return -1;
@@ -201,7 +215,7 @@
     const colors = colorAttr.array;
     for (let i = 0; i < globalSubs.length; i++) {
       const gi = globalSubs[i];
-      if (gi < 0) continue; // claimed-by-split sub: not in the main mesh
+      if (gi < 0) continue;
       const o = gi * 9;
       for (let k = 0; k < 9; k += 3) {
         colors[o + k] = col.r;
@@ -239,7 +253,8 @@
     colorAttr.needsUpdate = true;
   }
 
-  // Raycast the mesh; returns { meshIndex, localSub, state, point } or null.
+  // Raycast the mesh; returns { meshIndex, localSub, state, point (model coords),
+  // world (display coords), normal } or null.
   function pick(clientX, clientY) {
     if (!meshObj) return null;
     const rect = renderer.domElement.getBoundingClientRect();
@@ -256,7 +271,8 @@
       meshIndex: mi,
       localSub: renderMap[mi][renderedLocal],
       state: triState[gsub],
-      point: hits[0].point,
+      point: hits[0].point.clone().sub(tmpV.set(meshOffsets[mi][0], meshOffsets[mi][1], meshOffsets[mi][2])), // model coords
+      world: hits[0].point, // display coords (for cursors/gizmos)
       normal: hits[0].face ? hits[0].face.normal : ZUP,
     };
   }
@@ -315,10 +331,6 @@
   function animate() {
     requestAnimationFrame(animate);
     controls.update();
-    for (const o of splitObjs) {
-      o.cur.lerp(o.target, 0.15);
-      o.mesh.position.copy(o.cur);
-    }
     renderer.render(scene, camera);
   }
 
@@ -337,67 +349,11 @@
     return c;
   }
 
-  function clearSplitObjs() {
-    for (const o of splitObjs) { root.remove(o.mesh); o.mesh.geometry.dispose(); o.mesh.material.dispose(); }
-    splitObjs = [];
-  }
-
-  function clearRemainderCaps() {
-    for (const m of remainderCapObjs) { root.remove(m); m.geometry.dispose(); m.material.dispose(); }
-    remainderCapObjs = [];
-  }
-  // A double-sided mesh that fills the hole a split part left, built from the
-  // part's cap (reversed so it faces out of the remainder). Stays at the original
-  // position (no explode offset), so it plugs the hole while the part floats away.
-  function capMeshFor(part, solid) {
-    const cap = solid.cap;
-    if (!cap || !cap.tris || !cap.tris.length) return null;
-    const g = Cleanup.buildSubGraph(doc.meshes[part.meshIndex]);
-    const nv = cap.verts.length + cap.extraPts.length;
-    const pos = new Float32Array(nv * 3);
-    for (let i = 0; i < cap.verts.length; i++) {
-      const gid = cap.verts[i];
-      pos[i * 3] = g.vx[gid]; pos[i * 3 + 1] = g.vy[gid]; pos[i * 3 + 2] = g.vz[gid];
-    }
-    for (let i = 0; i < cap.extraPts.length; i++) {
-      const e = cap.extraPts[i], o = (cap.verts.length + i) * 3;
-      pos[o] = e[0]; pos[o + 1] = e[1]; pos[o + 2] = e[2];
-    }
-    const idx = new Uint32Array(cap.tris.length * 3);
-    for (let t = 0; t < cap.tris.length; t++) {
-      // reversed winding (remainder side); double-sided anyway for safe visibility
-      idx[t * 3] = cap.tris[t][0]; idx[t * 3 + 1] = cap.tris[t][2]; idx[t * 3 + 2] = cap.tris[t][1];
-    }
-    const gg = new THREE.BufferGeometry();
-    gg.setAttribute("position", new THREE.BufferAttribute(pos, 3));
-    gg.setIndex(new THREE.BufferAttribute(idx, 1));
-    gg.computeVertexNormals();
-    // fill the hole with the surrounding (majority bordering) color, matching the export
-    const fillCol = linColor(Split.majorityBorderColor(doc.meshes[part.meshIndex], g, part));
-    const mat = new THREE.MeshStandardMaterial({ color: fillCol.clone(), roughness: 0.85, metalness: 0.0, side: THREE.DoubleSide });
-    return new THREE.Mesh(gg, mat);
-  }
-
   function setVisibleMeshes(set) { visibleMeshes = set; }
-  // Show/hide the main merged mesh + its hole-fill caps without rebuilding.
+  // Show/hide the main merged mesh without rebuilding.
   function setMainVisible(v) {
     if (meshObj) meshObj.visible = v;
-    if (!v) for (const m of remainderCapObjs) m.visible = false;
   }
-  // Pin a split part at the model origin (un-explode it, stop its animation) so
-  // it sits at its true model-space location — used when isolating a part.
-  function pinPart(id) {
-    const o = splitObjs.find((x) => x.id === id);
-    if (o) { o.cur.set(0, 0, 0); o.target.set(0, 0, 0); o.mesh.position.set(0, 0, 0); }
-  }
-  // Show only the split parts whose id is in idSet (null = show all parts).
-  function setPartVisibility(idSet) {
-    for (const o of splitObjs) o.mesh.visible = !idSet || idSet.has(o.id);
-    for (const m of remainderCapObjs) m.visible = !idSet; // caps only make sense with the main mesh
-  }
-  // The THREE.Mesh of the split part with the given id (for framing on it).
-  function partObject(id) { const o = splitObjs.find((x) => x.id === id); return o ? o.mesh : null; }
-
   let cutPlaneObj = null;
   // Show a translucent cut-plane preview ({px,py,pz,nx,ny,nz}) or hide (null).
   function setCutPlane(plane) {
@@ -449,56 +405,11 @@
     ringPlanesObj.visible = true;
   }
 
-  // parts: [{ meshIndex, subs, state }]
-  function setSplitParts(parts) {
-    const prevById = new Map();
-    for (const o of splitObjs) if (o.id != null) prevById.set(o.id, o.cur);
-    clearSplitObjs();
-    clearRemainderCaps();
-    if (!geom || !parts || !parts.length) return;
-    const c = geom.boundingSphere ? geom.boundingSphere.center : new THREE.Vector3();
-    const r = geom.boundingSphere ? geom.boundingSphere.radius || 50 : 50;
-    const built = [];
-    for (const p of parts) {
-      const s = Split.solidFromSubs(doc.meshes[p.meshIndex], Array.from(p.subs), p.method || "liepa");
-      const gg = new THREE.BufferGeometry();
-      gg.setAttribute("position", new THREE.BufferAttribute(s.positions, 3));
-      gg.setIndex(new THREE.BufferAttribute(s.indices, 1));
-      gg.computeVertexNormals();
-      gg.computeBoundingSphere();
-      gg.computeBoundingBox();
-      const mat = new THREE.MeshStandardMaterial({
-        color: linColor(p.state).clone(), roughness: 0.75, metalness: 0.0,
-      });
-      built.push({ p, s, mesh: new THREE.Mesh(gg, mat) });
-    }
-    // row layout beside the body: parts slot along +X on the base plane
-    if (!geom.boundingBox) geom.computeBoundingBox();
-    const bb = geom.boundingBox;
-    const bodyBox = { min: [bb.min.x, bb.min.y, bb.min.z], max: [bb.max.x, bb.max.y, bb.max.z] };
-    const margin = 0.06 * (geom.boundingSphere ? 2 * (geom.boundingSphere.radius || 50) : 50);
-    const partBoxes = built.map(({ mesh }) => {
-      const b = mesh.geometry.boundingBox;
-      return { min: [b.min.x, b.min.y, b.min.z], max: [b.max.x, b.max.y, b.max.z] };
-    });
-    const offs = Split.layoutParts(bodyBox, partBoxes, margin);
-    built.forEach(({ p, s, mesh }, i) => {
-      const target = new THREE.Vector3(offs[i][0], offs[i][1], offs[i][2]);
-      root.add(mesh);
-      const cur = prevById.get(p.id) || new THREE.Vector3();
-      mesh.position.copy(cur);
-      splitObjs.push({ id: p.id, mesh, target, cur });
-      const capMesh = capMeshFor(p, s);
-      if (capMesh) { root.add(capMesh); remainderCapObjs.push(capMesh); }
-    });
-  }
-
   // (Re)build the sub-triangle geometry from each mesh's current paints.
-  function build(d, claimed) {
+  function build(d) {
     doc = d;
     stateColorCache = {};
-    if (!claimed) claimedSets = d.meshes.map(() => new Set());
-    else claimedSets = claimed;
+    computeOffsets(d);
     renderMap = d.meshes.map(() => []);
     origToRender = d.meshes.map(() => new Map());
 
@@ -545,8 +456,8 @@
         for (let i = 0; i < m.nf; i++) { faceStart[gf] = t; gf += 1; } // keep faceStart globally indexed
         continue;
       }
-      let origLocal = 0; // original leaf index within this mesh (claimed + unclaimed)
-      const claimedSet = claimedSets[mi] || new Set();
+      let origLocal = 0; // original leaf index within this mesh
+      const [ox, oy, oz] = meshOffsets[mi];
       for (let i = 0; i < m.nf; i++) {
         faceStart[gf] = t;
         const a = m.v1[i] * 3, b = m.v2[i] * 3, c = m.v3[i] * 3;
@@ -555,10 +466,9 @@
         const cx = P[c], cy = P[c + 1], cz = P[c + 2];
         const emitLeaf = (state, x0,y0,z0,x1,y1,z1,x2,y2,z2) => {
           const mine = origLocal; origLocal++;
-          if (claimedSet.has(mine)) return;        // hidden: this part lifted out
-          positions[off] = x0; positions[off+1] = y0; positions[off+2] = z0;
-          positions[off+3] = x1; positions[off+4] = y1; positions[off+5] = z1;
-          positions[off+6] = x2; positions[off+7] = y2; positions[off+8] = z2;
+          positions[off] = x0 + ox; positions[off+1] = y0 + oy; positions[off+2] = z0 + oz;
+          positions[off+3] = x1 + ox; positions[off+4] = y1 + oy; positions[off+5] = z1 + oz;
+          positions[off+6] = x2 + ox; positions[off+7] = y2 + oy; positions[off+8] = z2 + oz;
           triState[t] = state;
           origToRender[mi].set(mine, renderMap[mi].length);
           renderMap[mi].push(mine);
@@ -652,15 +562,13 @@
     paintSubs,
     toGlobalSub,
     subTriangleCount: () => totalSub,
-    setSplitParts,
     setCutPlane,
     setRingPlanes,
     setPreview,
     clearPreview,
     setVisibleMeshes,
     setMainVisible,
-    pinPart,
-    setPartVisibility,
-    partObject,
+    meshOffset,
+    setLayout,
   };
 })(window);

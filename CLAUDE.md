@@ -14,7 +14,7 @@ graph. Keep it that way (no bundler/ESM migration).
   modules and produces phantom "X is not a function" errors.
 - **Tests:** `npm test` (= `node --test`). Node's built-in runner;
   `tests/harness.js` loads the browser IIFEs into a `vm` sandbox (with
-  vendored three.js + poly2tri) and returns the globals. 99 tests.
+  vendored three.js + poly2tri) and returns the globals. 111 tests.
 
 ## Hard rules
 
@@ -46,9 +46,15 @@ graph. Keep it that way (no bundler/ESM migration).
 - `caps.js` — boundary-loop extraction and cap triangulation. The cap
   descriptor is `{ verts, extraPts, tris }`: triangle index `i < verts.length`
   → welded global vertex id `verts[i]`, else `extraPts[i - verts.length]`.
-- `split.js` — watertight solids from sub-triangle sets. `solidFromSubs` and
-  `remainderSolid` share ONE cut cap (the remainder reuses the part's cap
-  reversed), so split parts and the remainder stay coincident.
+- `meshgeo.js` — pure geometry: cached bounds, directed closed-surface check,
+  Möller tri–tri test, face grid + inward ray cast (`rayHit`, back-face only).
+- `split.js` — volumetric split: `plugSolids(mesh, subs, {depth, method})` →
+  `{ part, remainder }` as real document meshes (patch + inward wall + bottom;
+  the remainder gets the reversed wall/bottom = matching pocket). Depth per rim
+  vertex = `min(depth, ½·t_hit) · |cos θ|`; self-intersection → depth halving
+  (4×, then shell); outputs must pass `MeshGeo.checkClosed` or the split is
+  refused. Parts carry `mesh.part = { label, state }`; the viewer lays them out
+  in a row (display-only offsets), export stays coincident.
 - `planecut.js` — geometric plane cut (`cutMesh`): exact triangle clipping
   with per-edge welded section points, section chords from clipped triangles
   AND from on-plane mesh edges, flat earcut caps wound ±n. Cutting sets
