@@ -44,8 +44,9 @@ so every other tool (paint, Cut, Split again) works on them unchanged.
 
 ## Geometry — `Split.plugSolids(mesh, subs, opts)` (js/split.js)
 
-`opts = { depth, method }`. Returns `{ part, remainder }` — two document
-meshes `{ positions, nf, v1, v2, v3, paints }` plus `part.part = { label }`
+`opts = { depth, method }`. Returns `{ part, remainder, info }` — two document
+meshes `{ positions, nf, v1, v2, v3, paints }` (the app sets
+`part.part = { label, state }`)
 — or `{ error }` with a user-facing reason.
 
 ### Shared conformed surface
@@ -112,7 +113,10 @@ paint string per triangle). Wall and bottom: the part's state in the part;
   and against the patch triangles (grid-bucketed triangle–triangle test,
   Möller; non-adjacent pairs only). On any intersection: halve every `t_i`
   and rebuild wall + bottom, up to 4 times; final fallback `t_i = 0`
-  (today's lens) with toast *"Region too concave for a plug — made a shell"*.
+  (today's lens) with toast *"Region too sharp for a plug — made a shell"*.
+  (The crossing case is a **convex** ridge: inward normals on both sides of a
+  sharp feature converge below it; the half-thickness clamp alone does not
+  prevent the offset segments from crossing there.)
 - **Watertight gate** on both outputs: every undirected edge used exactly
   twice **and** traversed once in each direction (the harness's
   `directedViolations` logic moves into `Split.checkClosed(mesh)` so app and
@@ -141,7 +145,7 @@ paint string per triangle). Wall and bottom: the part's state in the part;
 
 ## Viewer and layout (js/viewer.js)
 
-- `mesh.part = { label }`; `label = "Part N · <color hex>"` assigned at
+- `mesh.part = { label, state }`; `label = "Part N · <color name>"` assigned at
   split time (N = count of part meshes + 1). Cut halves copy `part` from
   their source so a cut part stays a part.
 - **Display-only row layout:** `Viewer.build` computes, for meshes with
@@ -180,8 +184,8 @@ Snapshots already store `meshList` + `synthetic` (plane cut needs it).
   at `z ≥ 0.25` (half thickness), volumes sum, no intersections.
 - **Knife-edge factor:** cube region = top face + upper half of the four
   sides (cross-section rim at z=1) → zero wall triangles; part = lens.
-- **Concave fallback:** two slabs meeting at 60° with a region spanning the
-  crease → `plugSolids` returns after ≥1 halving, outputs closed, volumes
+- **Convex-ridge fallback:** gridded roof prism, region = upper half of both
+  slopes → `plugSolids` returns after ≥1 halving, outputs closed, volumes
   sum.
 - **Refusals:** pinch (two regions sharing one vertex) → `error`; whole
   mesh → `error`; empty → `error`.
