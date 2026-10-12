@@ -244,7 +244,7 @@
   /* Shared refinement walker: paint leaves fully inside a region and SUBDIVIDE
    * leaves crossing its edge (depth-capped), matching Paint.tessellate's exact
    * conventions. Callbacks:
-   *   faceInRange(x0..x2) -> bool  broad-phase reject per root face
+   *   faceInRange(x0..x2, f) -> bool  broad-phase reject per root face (f = face index)
    *   overlaps(ax..cz)    -> bool  does this leaf touch the region?
    *   covered(x,y,z)      -> bool  is this point inside the region?
    * Returns { count, changedFaces }. */
@@ -312,7 +312,7 @@
       const x0 = P[a], y0 = P[a + 1], z0 = P[a + 2];
       const x1 = P[b], y1 = P[b + 1], z1 = P[b + 2];
       const x2 = P[c], y2 = P[c + 1], z2 = P[c + 2];
-      if (!faceInRange(x0, y0, z0, x1, y1, z1, x2, y2, z2)) continue;
+      if (!faceInRange(x0, y0, z0, x1, y1, z1, x2, y2, z2, f)) continue;
       const tree = Paint.decode(mesh.paints[f]);
       faceChanged = false;
       walk(tree, 0, x0, y0, z0, x1, y1, z1, x2, y2, z2);
@@ -401,7 +401,26 @@
     return refinePaint(mesh, state, { faceInRange, overlaps, covered, maxDepth: (opts && opts.maxDepth) || 4 });
   }
 
+  /* Paint the ring slab |(p − c)·n| ≤ h on `faces` (from Cleanup.ringFaces).
+   * refine (default true): refinePaint subdivides leaves crossing the slab
+   * planes, so band edges are straight. refine:false: whole leaves whose
+   * centroid is in the slab (Cleanup.ringLeaves), no added geometry. */
+  function paintRing(mesh, faces, c, n, h, state, opts) {
+    if (opts && opts.refine === false) return applyStates(mesh, Cleanup.ringLeaves(mesh, faces, c, n, h), state);
+    const inSet = new Uint8Array(mesh.nf);
+    for (let i = 0; i < faces.length; i++) inSet[faces[i]] = 1;
+    const d = (x, y, z) => (x - c[0]) * n[0] + (y - c[1]) * n[1] + (z - c[2]) * n[2];
+    const covered = (x, y, z) => Math.abs(d(x, y, z)) <= h;
+    const overlaps = (ax, ay, az, bx, by, bz, cx, cy, cz) => {
+      const a = d(ax, ay, az), b = d(bx, by, bz), e = d(cx, cy, cz);
+      return !((a > h && b > h && e > h) || (a < -h && b < -h && e < -h));
+    };
+    const faceInRange = (x0, y0, z0, x1, y1, z1, x2, y2, z2, f) => inSet[f] === 1;
+    return refinePaint(mesh, state, { faceInRange, overlaps, covered, maxDepth: (opts && opts.maxDepth) || 4 });
+  }
+
   Object.assign(Cleanup, {
+    paintRing,
     applyStates,
     removeIslandsSub,
     fillRegion,

@@ -132,3 +132,62 @@ test("ringLeaves keeps only in-slab leaves of the given faces", () => {
   }
   assert.ok(leaves.length > 0, "found the low-centroid faces' leaves");
 });
+
+function totalLeaves(Paint, mesh) {
+  let n = 0;
+  for (const p of mesh.paints) n += Paint.leafCount(Paint.decode(p));
+  return n;
+}
+function subArea(g, s) {
+  const a = g.sv[s * 3], b = g.sv[s * 3 + 1], c = g.sv[s * 3 + 2];
+  const ux = g.vx[b] - g.vx[a], uy = g.vy[b] - g.vy[a], uz = g.vz[b] - g.vz[a];
+  const vx = g.vx[c] - g.vx[a], vy = g.vy[c] - g.vy[a], vz = g.vz[c] - g.vz[a];
+  return 0.5 * Math.hypot(uy * vz - uz * vy, uz * vx - ux * vz, ux * vy - uy * vx);
+}
+
+test("paintRing (refined) paints a closed crisp band", () => {
+  const { Cleanup } = loadModules();
+  const segs = 8, r = 1, h = 2, zc = 5;
+  const m = makeCylinder(segs, r, 10, 0);
+  const c = [1, 0, zc], n = [0, 0, 1];
+  const faces = Cleanup.ringFaces(m, 0, c, n, h);
+  const res = Cleanup.paintRing(m, faces, c, n, h, 3, { maxDepth: 6 });
+  assert.strictEqual(res.changedFaces.size, 16, "every face of the loop changed");
+  const g = Cleanup.buildSubGraph(m);
+  let area = 0;
+  for (let s = 0; s < g.NS; s++) {
+    const dz = Math.abs(g.cen[s * 3 + 2] - zc);
+    const painted = g.subLeaf[s].state === 3;
+    if (painted) { assert.ok(dz <= h + 1e-6, "painted leaf inside slab"); area += subArea(g, s); }
+    if (dz <= h - 0.2) assert.ok(painted, "interior leaf painted (no gaps)");
+  }
+  const perimeter = segs * 2 * r * Math.sin(Math.PI / segs);
+  const expected = 2 * h * perimeter;
+  assert.ok(Math.abs(area - expected) / expected < 0.1, `area ${area} vs ${expected}`);
+});
+
+test("paintRing refine:false paints exactly ringLeaves and adds no geometry", () => {
+  const { Paint, Cleanup } = loadModules();
+  const m = makeCylinder(8, 1, 10, 0);
+  const c = [1, 0, 10 / 3], n = [0, 0, 1], h = 0.5;
+  const faces = Cleanup.ringFaces(m, 0, c, n, h);
+  const expected = Array.from(Cleanup.ringLeaves(m, faces, c, n, h));
+  const before = totalLeaves(Paint, m);
+  const res = Cleanup.paintRing(m, faces, c, n, h, 3, { refine: false });
+  assert.ok(res.changedFaces.size > 0, "something painted");
+  assert.strictEqual(totalLeaves(Paint, m), before, "no leaves added");
+  const g = Cleanup.buildSubGraph(m);
+  const painted = [];
+  for (let s = 0; s < g.NS; s++) if (g.subLeaf[s].state === 3) painted.push(s);
+  assert.deepStrictEqual(painted, expected);
+});
+
+test("paintRing leaves faces outside the given set untouched", () => {
+  const { Cleanup } = loadModules();
+  const m = joinMeshes(makeCylinder(8, 1, 10, 0), makeCylinder(8, 1, 10, 5));
+  const c = [1, 0, 5], n = [0, 0, 1], h = 1;
+  const faces = Cleanup.ringFaces(m, 0, c, n, h);
+  const res = Cleanup.paintRing(m, faces, c, n, h, 3);
+  for (const f of res.changedFaces) assert.ok(f < 16, "only the clicked cylinder changed");
+  for (let f = 16; f < 32; f++) assert.strictEqual(m.paints[f], "", "second cylinder unpainted");
+});
