@@ -105,3 +105,25 @@ test("sample: the neck band (seed 89601, 7 pinch vertices on its rim) splits at 
   assert.strictEqual(r.info.wraps, true, "the neck band wraps around: " + JSON.stringify(r.info));
   assert.ok(vp > 5, "neck-band plug volume " + vp);
 });
+
+// Chained split on a remainder: the neck band's rim has pinch vertices, whose
+// per-wedge copies are coincident but distinct vertices of the remainder. The
+// next split must not weld them (that left 7 non-manifold edges and refused
+// the ear tip, also before the affected-faces change).
+test("sample: the ear tip still splits from the neck band's remainder", { timeout: 120000 }, async () => {
+  const { M, mesh } = await getSample();
+  const g0 = M.Cleanup.buildSubGraph(mesh);
+  const a = M.Split.plugSolids(mesh, M.Cleanup.selectColorRegion(mesh, 89601), { depth: 3 });
+  assert.ok(!a.error, a.error);
+  const rem = a.remainder, g = M.Cleanup.buildSubGraph(rem), seed = 116289;
+  let best = -1, bd = Infinity; // the ear-tip sub of the remainder nearest the original seed
+  for (let s = 0; s < g.NS; s++) {
+    const d = (g.cen[s * 3] - g0.cen[seed * 3]) ** 2 + (g.cen[s * 3 + 1] - g0.cen[seed * 3 + 1]) ** 2 + (g.cen[s * 3 + 2] - g0.cen[seed * 3 + 2]) ** 2;
+    if (d < bd && g.subLeaf[s].state === 2) { bd = d; best = s; }
+  }
+  const b = M.Split.plugSolids(rem, M.Cleanup.selectColorRegion(rem, best), { depth: 3 });
+  assert.ok(!b.error, b.error + " " + JSON.stringify(b.info));
+  for (const m of [b.part, b.remainder]) assert.strictEqual(M.MeshGeo.checkClosed(m), 0);
+  const v0 = M.MeshGeo.signedVolume(mesh), sum = [a.part, b.part, b.remainder].reduce((s, m) => s + M.MeshGeo.signedVolume(m), 0);
+  assert.ok(Math.abs(sum - v0) < 1e-6 * v0, "volumes sum: " + sum + " vs " + v0);
+});

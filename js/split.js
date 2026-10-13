@@ -486,7 +486,7 @@
   // edge that carries a T-junction midpoint with an affected face (a kept
   // original triangle next to a conformed one would leave a T-junction).
   // corner: welded sub-graph id of every original face corner (the conformed
-  // triangles index the same ids, so kept and conformed faces weld).
+  // triangles index the same ids, so kept and conformed faces weld there).
   function affectedFaces(mesh, g, subs) {
     const nf = mesh.nf, P = mesh.positions, NVo = P.length / 3;
     const vmapO = new Int32Array(NVo).fill(-2);
@@ -562,7 +562,8 @@
     const emit = (F, paints) => {
       const remap = new Map(), xyz = [];
       const nf = F.length / 3, v1 = new Int32Array(nf), v2 = new Int32Array(nf), v3 = new Int32Array(nf);
-      const lid = (id) => { let i = remap.get(id); if (i === undefined) { i = remap.size; remap.set(id, i); xyz.push(...plug.pos(id)); } return i; };
+      const P = mesh.positions, at = (id) => (id < 0 ? [P[(-1 - id) * 3], P[(-1 - id) * 3 + 1], P[(-1 - id) * 3 + 2]] : plug.pos(id));
+      const lid = (id) => { let i = remap.get(id); if (i === undefined) { i = remap.size; remap.set(id, i); xyz.push(...at(id)); } return i; };
       for (let f = 0; f < nf; f++) { v1[f] = lid(F[f * 3]); v2[f] = lid(F[f * 3 + 1]); v3[f] = lid(F[f * 3 + 2]); }
       return { positions: Float32Array.from(xyz), nf, v1, v2, v3, paints };
     };
@@ -579,9 +580,16 @@
       if (isPatch[t] === 1) { PF.push(tri[t * 3], tri[t * 3 + 1], tri[t * 3 + 2]); PS.push(p); }
       else { RF.push(tri[t * 3], tri[t * 3 + 1], tri[t * 3 + 2]); RS.push(p); } // remainder + cancelled patch
     }
+    // kept faces keep their ORIGINAL vertex ids (encoded −1 − v), except at
+    // vertices they share with affected faces, which take the welded id so
+    // the two weld. (Welding everything by coordinate would merge coincident
+    // vertices an earlier split kept apart — the per-wedge pinch copies.)
+    const touches = new Uint8Array(mesh.positions.length / 3), VO = [mesh.v1, mesh.v2, mesh.v3];
+    for (let f = 0; f < mesh.nf; f++) if (affected[f]) for (const V of VO) touches[V[f]] = 1;
     for (let f = 0; f < mesh.nf; f++) {
       if (affected[f]) continue;
-      RF.push(corner[f * 3], corner[f * 3 + 1], corner[f * 3 + 2]); RS.push(mesh.paints[f]);
+      for (let k = 0; k < 3; k++) { const v = VO[k][f]; RF.push(touches[v] ? corner[f * 3 + k] : -1 - v); }
+      RS.push(mesh.paints[f]);
     }
     const partP = solid(partState), pocketP = solid(pocketState);
     for (const L of [plug.walls, plug.skins]) for (let i = 0; i < L.length; i += 3) {
