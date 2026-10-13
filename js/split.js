@@ -427,6 +427,60 @@
     return false;
   }
 
+  // Euler characteristic χ = V − E + F of the conformed triangles of a sub set,
+  // pinch vertices counted once per wedge (a region touching itself at a
+  // vertex is still a disc): 1 for a disc, 0 for a band, 1 − h with h holes.
+  function patchEuler(conf, inSet) {
+    const { tri, triSub, nT } = conf;
+    const T = [];
+    for (let t = 0; t < nT; t++) if (inSet[triSub[t]]) T.push(t);
+    const nP = T.length, parent = new Int32Array(nP * 3);
+    for (let i = 0; i < parent.length; i++) parent[i] = i;
+    const find = (x) => { while (parent[x] !== x) { parent[x] = parent[parent[x]]; x = parent[x]; } return x; };
+    const unite = (a, b) => { a = find(a); b = find(b); if (a !== b) parent[a] = b; };
+    const edges = new Map(), NI = conf.NC + 1e9; // keys only need to be unique
+    for (let j = 0; j < nP; j++) for (let k = 0; k < 3; k++) {
+      const t = T[j], u = tri[t * 3 + k], v = tri[t * 3 + (k + 1) % 3];
+      const key = u < v ? u * NI + v : v * NI + u, cu = j * 3 + k, cv = j * 3 + (k + 1) % 3;
+      const e = edges.get(key);
+      if (!e) edges.set(key, [u < v ? cu : cv, u < v ? cv : cu]);
+      else { unite(e[0], u < v ? cu : cv); unite(e[1], u < v ? cv : cu); }
+    }
+    const roots = new Set();
+    for (let c = 0; c < nP * 3; c++) roots.add(find(c));
+    return roots.size - edges.size + nP;
+  }
+
+  // Does the part wrap around the model (so it cannot be slid into its
+  // pocket)? euler: χ of the region itself. wraps: χ ≠ 1 after filling the
+  // paint specks — complement components under 1% of the region's area
+  // (real rims enclose 0.001 mm² islands that are holes topologically but
+  // never block assembly).
+  function wrapInfo(g, conf, inSub) {
+    const { NS, sv, vx, vy, vz, start, list } = g;
+    const area = (s) => {
+      const a = sv[s * 3], b = sv[s * 3 + 1], c = sv[s * 3 + 2];
+      const ux = vx[b] - vx[a], uy = vy[b] - vy[a], uz = vz[b] - vz[a], wx = vx[c] - vx[a], wy = vy[c] - vy[a], wz = vz[c] - vz[a];
+      return Math.hypot(uy * wz - uz * wy, uz * wx - ux * wz, ux * wy - uy * wx) / 2;
+    };
+    let regionArea = 0;
+    for (let s = 0; s < NS; s++) if (inSub[s]) regionArea += area(s);
+    const filled = Uint8Array.from(inSub), comp = new Int32Array(NS).fill(-1);
+    let specks = 0;
+    for (let s0 = 0; s0 < NS; s0++) {
+      if (inSub[s0] || comp[s0] >= 0) continue;
+      const members = [s0]; comp[s0] = s0;
+      let a = 0;
+      for (let i = 0; i < members.length; i++) {
+        const s = members[i]; a += area(s);
+        for (let e = start[s]; e < start[s + 1]; e++) { const v = list[e]; if (!inSub[v] && comp[v] < 0) { comp[v] = s0; members.push(v); } }
+      }
+      if (a < 0.01 * regionArea) { specks++; for (const s of members) filled[s] = 1; }
+    }
+    const euler = patchEuler(conf, inSub);
+    return { euler, specks, wraps: (specks ? patchEuler(conf, filled) : euler) !== 1 };
+  }
+
   // The faces whose conformed triangulation must replace the original
   // triangle: the region's faces plus, transitively, every face sharing an
   // edge that carries a T-junction midpoint with an affected face (a kept
@@ -496,7 +550,7 @@
       if (halvings >= 4) break;
       halvings++; scale /= 2;
     }
-    const info = { halvings, shell: false, faces: subs.length };
+    const info = { halvings, shell: false, faces: subs.length, ...wrapInfo(g, conf, inSub) };
     if (!clean) return { error: "Couldn't make a clean solid here (region too thin or sharp for a plug)", info };
     const partState = g.subLeaf[subs[0]].state;
     const pocketState = majorityBorderColor(mesh, g, { subs, state: partState });

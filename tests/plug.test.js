@@ -303,3 +303,34 @@ test("plugSolids: faces outside the affected set keep their triangle and paint s
   const plug = r.part.nf - region.length; // walls + skins
   assert.strictEqual(r.remainder.nf, box.nf - region.length + plug, "remainder = original - region + plug");
 });
+
+// A part whose patch is not a disc (χ = V − E + F ≠ 1: a band around the
+// model, or a region with holes) cannot be slid into its pocket.
+test("plugSolids: patch Euler characteristic flags wrap-around parts", () => {
+  const { Cleanup, Split } = loadModules();
+  const disc = makeGridBox(4, 4, 4, 4);
+  paintWhere(disc, (x, y, z) => z === 4 && x > 1 && x < 3 && y > 1 && y < 3, 1);
+  const a = Split.plugSolids(disc, regionOf(Cleanup, disc, 1), { depth: 0.5 });
+  assert.ok(!a.error, a.error);
+  assert.strictEqual(a.info.euler, 1); assert.strictEqual(a.info.wraps, false);
+  const band = makeGridBox(4, 4, 4, 4);
+  paintWhere(band, (x, y, z) => z > 2 && z < 4, 1); // upper half of the four sides: a ring
+  const b = Split.plugSolids(band, regionOf(Cleanup, band, 1), { depth: 0.5 });
+  assert.strictEqual(b.info.euler, 0, JSON.stringify(b.info)); assert.strictEqual(b.info.wraps, true);
+});
+
+// Real rims enclose tiny unpainted specks (0.001 mm² on the sample): holes
+// topologically, but they never block assembly — no wrap warning.
+test("plugSolids: a paint speck inside the region is not a wrap", () => {
+  const { Cleanup, Split, Paint } = loadModules();
+  const box = makeGridBox(4, 4, 4, 4);
+  const top = paintWhere(box, (x, y, z) => z === 4 && x > 1 && x < 3 && y > 1 && y < 3, 1);
+  const L0 = { leaf: true, state: 0 }, L1 = { leaf: true, state: 1 };
+  // centre child of the centre child (kids[0] is the M1M2M3 child) stays state 0
+  box.paints[top[0]] = Paint.encode({ leaf: false, split: 3, special: 0, kids: [{ leaf: false, split: 3, special: 0, kids: [L0, L1, L1, L1] }, L1, L1, L1] });
+  const r = Split.plugSolids(box, regionOf(Cleanup, box, 1), { depth: 0.5 });
+  assert.ok(!r.error, r.error);
+  assert.strictEqual(r.info.euler, 0, "the speck is a hole");
+  assert.strictEqual(r.info.specks, 1);
+  assert.strictEqual(r.info.wraps, false);
+});

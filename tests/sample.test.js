@@ -79,7 +79,7 @@ async function splitRegion(seed, depth) {
   const got = new Map();
   for (const p of r.remainder.paints) if (kept.has(p)) got.set(p, (got.get(p) || 0) + 1);
   for (const [p, n] of kept) assert.strictEqual(got.get(p), n, "paint tree carried verbatim: " + p);
-  console.log("# " + seed + ": affected " + r.info.affectedFaces + ", remainder nf " + r.remainder.nf + ", part nf " + r.part.nf + ", kept trees " + trees);
+  console.log("# " + seed + ": affected " + r.info.affectedFaces + ", remainder nf " + r.remainder.nf + ", part nf " + r.part.nf + ", kept trees " + trees + ", euler " + r.info.euler + ", specks " + r.info.specks + ", wraps " + r.info.wraps);
   const v = validity(M, mesh, r);
   assert.ok(v.plugVertices > 0);
   assert.strictEqual(v.outside, 0, "plug vertices outside the original solid");
@@ -88,17 +88,20 @@ async function splitRegion(seed, depth) {
 }
 
 test("sample: the belly region (seed 490285) splits at depth 3", { timeout: 120000 }, async () => {
-  const { subs, vp } = await splitRegion(490285, 3);
+  const { subs, vp, r } = await splitRegion(490285, 3);
   assert.strictEqual(subs.length, 44138);
+  assert.strictEqual(r.info.wraps, false, "belly is a disc once its paint specks are filled: " + JSON.stringify(r.info));
   assert.ok(vp > 100, "a real plug, not a sliver: " + vp);
 });
 
 test("sample: an ear tip (seed 116289) splits at depth 3", { timeout: 120000 }, async () => {
-  const { vp } = await splitRegion(116289, 3);
+  const { vp, r } = await splitRegion(116289, 3);
+  assert.strictEqual(r.info.wraps, false, "ear tip is a cap: " + JSON.stringify(r.info));
   assert.ok(vp > 10, "ear-tip plug volume " + vp);
 });
 
 test("sample: the neck band (seed 89601, 7 pinch vertices on its rim) splits at depth 3", { timeout: 120000 }, async () => {
-  const { vp } = await splitRegion(89601, 3);
+  const { vp, r } = await splitRegion(89601, 3);
+  assert.strictEqual(r.info.wraps, true, "the neck band wraps around: " + JSON.stringify(r.info));
   assert.ok(vp > 5, "neck-band plug volume " + vp);
 });
