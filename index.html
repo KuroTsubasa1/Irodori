@@ -122,15 +122,9 @@
         </div>
 
         <div class="opt" data-panel="split" hidden>
-          <span class="optlabel">Cap method</span>
-          <select id="capMethod">
-            <option value="liepa" selected>Liepa (smooth)</option>
-            <option value="earcut">Earcut</option>
-            <option value="cdt">CDT (Delaunay)</option>
-            <option value="projected">Projected normal</option>
-            <option value="centroid">Centroid</option>
-          </select>
-          <span class="muted">Click a colored part to lift it out as its own solid.</span>
+          <span class="optlabel">Depth (mm)</span>
+          <input type="number" id="splitDepth" min="0" step="0.1" value="3" style="width:64px" />
+          <span class="muted">Click a colored region to lift it out as a solid part.</span>
         </div>
 
         <div class="opt" data-panel="cut" hidden>
@@ -242,7 +236,6 @@
           <div class="axes" id="exportFmt">
             <button type="button" data-fmt="3mf" class="on">3MF</button>
             <button type="button" data-fmt="obj">OBJ</button>
-            <button type="button" data-fmt="split">Split</button>
           </div>
           <p id="exportDesc" class="hint"></p>
           <label class="check" id="exportWeldWrap" hidden><input type="checkbox" id="exportWeld" checked /><span>Weld vertices — smaller file, smooth shading</span></label>
@@ -269,8 +262,7 @@
     <script src="js/select.js"></script>
     <script src="js/decal.js"></script>
     <script src="js/cleanup.js"></script>
-    <script src="js/liepa.js"></script>
-    <script src="js/caps.js"></script>
+    <script src="js/meshgeo.js"></script>
     <script src="js/split.js"></script>
     <script src="js/planecut.js"></script>
     <script src="js/viewer.js"></script>

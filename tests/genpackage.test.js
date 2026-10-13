@@ -1,4 +1,4 @@
-// Regression test for assembleGeneratedPackage (exportSplit / exportGenerated).
+// Regression test for assembleGeneratedPackage (exportGenerated).
 //
 // The generated package writes geometry to a FIXED path
 // (3D/Objects/object_1.model) and references it from 3dmodel.model via a
@@ -35,7 +35,7 @@ function loadWithZip() {
   for (const f of [
     "vendor/three.min.js", "vendor/poly2tri.min.js", "vendor/jszip.min.js",
     "js/paint.js", "js/objexport.js", "js/subgraph.js", "js/select.js",
-    "js/cleanup.js", "js/liepa.js", "js/caps.js", "js/split.js",
+    "js/cleanup.js", "js/split.js",
     "js/planecut.js", "js/threemf.js",
   ]) vm.runInContext(fs.readFileSync(path.join(root, f), "utf8"), sandbox, { filename: f });
   return sandbox;
@@ -96,4 +96,18 @@ test("assembleGeneratedPackage declares the Objects relationship regardless of s
   assert.ok(out.file("3D/Objects/object_1.model"), "Objects/object_1.model must be present");
   const rootModel = await out.file("3D/3dmodel.model").async("string");
   assert.match(rootModel, /p:path="\/3D\/Objects\/object_1\.model"/);
+});
+
+// Part names are derived from the part's CURRENT state by the caller (app.js
+// partLabel), so a deleted/shifted colour can never leave a stale name.
+test("exportGenerated names objects through opts.nameOf", async () => {
+  const { ThreeMF, JSZip } = loadWithZip();
+  const tri = () => ({ nf: 1, positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), v1: Int32Array.from([0]), v2: Int32Array.from([1]), v3: Int32Array.from([2]), paints: [""] });
+  const part = Object.assign(tri(), { part: { seq: 3, state: 2 } });
+  const doc = { zip: buildInlineSourceZip(JSZip), filaments: [{ hex: "#FFFFFF" }, { hex: "#000000" }], origFilamentCount: 1, defaultExtruder: 1, meshes: [tri(), part] };
+  const blob = await ThreeMF.exportGenerated(doc, { nameOf: (m, i) => (m.part ? "Part " + m.part.seq + " · Filament " + m.part.state : "Object " + (i + 1)) });
+  const out = await JSZip.loadAsync(blob.__buf.toString("base64"), { base64: true });
+  const cfg = await out.file("Metadata/model_settings.config").async("string");
+  assert.match(cfg, /key="name" value="Object 1"/);
+  assert.match(cfg, /key="name" value="Part 3 · Filament 2"/);
 });

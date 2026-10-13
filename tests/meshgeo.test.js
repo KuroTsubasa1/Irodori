@@ -1,0 +1,109 @@
+const test = require("node:test");
+const assert = require("node:assert");
+const { loadModules, makeClosedCube, makeOpenTube, directedViolations } = require("./harness");
+
+test("checkClosed: 0 for the cube, matches directedViolations on the open tube", () => {
+  const { MeshGeo } = loadModules();
+  const cube = makeClosedCube(), tube = makeOpenTube();
+  assert.strictEqual(MeshGeo.checkClosed(cube), 0);
+  const flat = (m) => { const I = []; for (let f = 0; f < m.nf; f++) I.push(m.v1[f], m.v2[f], m.v3[f]); return I; };
+  assert.strictEqual(MeshGeo.checkClosed(tube), directedViolations(flat(tube)));
+  assert.ok(MeshGeo.checkClosed(tube) > 0);
+  // flip one cube face -> 3 edges now traversed twice in the same direction
+  const bad = makeClosedCube(); const t = bad.v2[0]; bad.v2[0] = bad.v3[0]; bad.v3[0] = t;
+  assert.strictEqual(MeshGeo.checkClosed(bad), 3);
+});
+
+test("signedVolume: outward cube is 8, a flipped face changes it", () => {
+  const { MeshGeo } = loadModules();
+  const cube = makeClosedCube();
+  assert.ok(Math.abs(MeshGeo.signedVolume(cube) - 8) < 1e-9);
+  const bad = makeClosedCube(); const t = bad.v2[2]; bad.v2[2] = bad.v3[2]; bad.v3[2] = t; // face off the origin plane
+  assert.ok(MeshGeo.signedVolume(bad) < 8);
+});
+
+test("triTriIntersect: crossing yes, separated no, coplanar no", () => {
+  const { MeshGeo } = loadModules();
+  const A = [[0, 0, 0], [2, 0, 0], [0, 2, 0]];           // z=0
+  const B = [[0.5, 0.5, -1], [0.5, 0.5, 1], [1, 1, 1]];   // pierces A
+  assert.strictEqual(MeshGeo.triTriIntersect(...A, ...B), true);
+  const C = [[0.5, 0.5, 1], [0.5, 0.5, 2], [1, 1, 2]];    // entirely above
+  assert.strictEqual(MeshGeo.triTriIntersect(...A, ...C), false);
+  const D = [[0, 0, 0], [2, 0, 0], [0, 2, 0]];           // coplanar copy -> ignored
+  assert.strictEqual(MeshGeo.triTriIntersect(...A, ...D), false);
+  const E = [[5, 5, -1], [6, 5, 1], [5, 6, 1]];          // crosses z=0 outside A
+  assert.strictEqual(MeshGeo.triTriIntersect(...A, ...E), false);
+});
+
+test("rayHit: inward ray from the cube top hits the bottom from behind at t=2; backOnly ignores front faces", () => {
+  const { MeshGeo } = loadModules();
+  const cube = makeClosedCube(); // [0,2]^3
+  const grid = MeshGeo.faceGrid(cube);
+  const t = MeshGeo.rayHit(cube, grid, 1, 1, 2, 0, 0, -1, 1e-4, true);
+  assert.ok(Math.abs(t - 2) < 1e-6, "hit bottom at " + t);
+  // from outside above the cube, pointing down: the top is a FRONT face -> backOnly skips it, bottom is hit at t=3
+  const t2 = MeshGeo.rayHit(cube, grid, 1, 1, 3, 0, 0, -1, 1e-4, true);
+  assert.ok(Math.abs(t2 - 3) < 1e-6, "backOnly skipped the top: " + t2);
+  const t3 = MeshGeo.rayHit(cube, grid, 1, 1, 3, 0, 0, -1, 1e-4, false);
+  assert.ok(Math.abs(t3 - 1) < 1e-6, "front hit allowed: " + t3);
+  assert.strictEqual(MeshGeo.rayHit(cube, grid, 1, 1, 2, 0, 0, 1, 1e-4, true), Infinity, "upward ray leaves");
+});
+
+test("meshBounds recomputes after invalidateSub", () => {
+  const { MeshGeo, Cleanup } = loadModules();
+  const cube = makeClosedCube();
+  const b = MeshGeo.meshBounds(cube);
+  // Array.from: bounds arrays are created in the vm sandbox realm (cross-realm deepStrictEqual fails)
+  assert.deepStrictEqual([Array.from(b.min), Array.from(b.max)], [[0, 0, 0], [2, 2, 2]]);
+  cube.positions[0] = -1; // mutate; cached bounds are stale until invalidated
+  assert.strictEqual(MeshGeo.meshBounds(cube).min[0], 0);
+  Cleanup.invalidateSub(cube);
+  assert.strictEqual(MeshGeo.meshBounds(cube).min[0], -1);
+  assert.strictEqual(cube._grid, null);
+});
+
+// Real-data finding (sample model, 0.005 mm sub-triangles at |coord| ~ 33 mm):
+// an ABSOLUTE plane-distance epsilon on unnormalised normals snapped two
+// near-parallel, laterally separated tiny triangles onto each other's planes,
+// and the coplanar-ish interval test then reported a crossing.
+test("triTriIntersect: tiny near-parallel separated triangles are not an intersection (scale-relative epsilon)", () => {
+  const { MeshGeo } = loadModules();
+  const A = [[8.561429589986801, -33.660544633865356, 4.68804844468832], [8.565399885177612, -33.66306161880493, 4.692375004291534], [8.55706238746643, -33.660186767578125, 4.691412508487701]];
+  const B = [[8.558993577957153, -33.665942668914795, 4.7087187469005585], [8.554506063461304, -33.666424036026, 4.714968740940094], [8.554824829101562, -33.66450524330139, 4.708237498998642]];
+  // their y-ranges do not even overlap
+  assert.ok(Math.max(...B.map((p) => p[1])) < Math.min(...A.map((p) => p[1])));
+  assert.strictEqual(MeshGeo.triTriIntersect(...A, ...B), false);
+  // the same configuration scaled down 1000x around the origin stays a non-intersection
+  const s = (T) => T.map((p) => p.map((x) => x * 1e-3));
+  assert.strictEqual(MeshGeo.triTriIntersect(...s(A), ...s(B)), false);
+  // and a genuine crossing at that tiny scale is still found
+  const C = [[0, 0, 0], [2e-3, 0, 0], [0, 2e-3, 0]], E = [[5e-4, 5e-4, -1e-3], [5e-4, 5e-4, 1e-3], [1e-3, 1e-3, 1e-3]];
+  assert.strictEqual(MeshGeo.triTriIntersect(...C, ...E), true);
+});
+
+test("segTriCross: proper piercing only — endpoints on the plane, parallel and outside segments don't count", () => {
+  const { MeshGeo } = loadModules();
+  const A = [0, 0, 0], B = [2, 0, 0], C = [0, 2, 0];
+  assert.strictEqual(MeshGeo.segTriCross([0.5, 0.5, -1], [0.5, 0.5, 1], A, B, C), true);
+  assert.strictEqual(MeshGeo.segTriCross([0.5, 0.5, 0], [0.5, 0.5, 1], A, B, C), false, "starts on the triangle");
+  assert.strictEqual(MeshGeo.segTriCross([0.5, 0.5, 0.1], [0.6, 0.6, 0.1], A, B, C), false, "parallel above");
+  assert.strictEqual(MeshGeo.segTriCross([0.2, 0.2, 0], [0.6, 0.6, 0], A, B, C), false, "coplanar inside");
+  assert.strictEqual(MeshGeo.segTriCross([3, 3, -1], [3, 3, 1], A, B, C), false, "misses");
+});
+
+test("foldedPair: edge-adjacent triangles overlap only when folded flat onto each other", () => {
+  const { MeshGeo } = loadModules();
+  const s0 = [0, 0, 0], s1 = [1, 0, 0];
+  assert.strictEqual(MeshGeo.foldedPair(s0, s1, [0.5, 1, 0], [0.3, 0.5, 0]), true, "same side, coplanar");
+  assert.strictEqual(MeshGeo.foldedPair(s0, s1, [0.5, 1, 0], [0.5, -1, 0]), false, "flat, opposite sides");
+  assert.strictEqual(MeshGeo.foldedPair(s0, s1, [0.5, 1, 0], [0.5, 0, 1]), false, "90 degree hinge");
+});
+
+test("checkClosed: a doubled face and a missing face are both counted", () => {
+  const { MeshGeo } = loadModules();
+  const cube = makeClosedCube();
+  const drop = { ...cube, nf: cube.nf - 1, v1: cube.v1.slice(1), v2: cube.v2.slice(1), v3: cube.v3.slice(1) };
+  assert.strictEqual(MeshGeo.checkClosed(drop), 3, "three open edges");
+  const dup = { ...cube, nf: cube.nf + 1, v1: Int32Array.from([...cube.v1, cube.v1[0]]), v2: Int32Array.from([...cube.v2, cube.v2[0]]), v3: Int32Array.from([...cube.v3, cube.v3[0]]) };
+  assert.strictEqual(MeshGeo.checkClosed(dup), 3, "three edges used twice in one direction");
+});
