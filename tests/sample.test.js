@@ -66,6 +66,20 @@ async function splitRegion(seed, depth) {
   assert.strictEqual(M.MeshGeo.checkClosed(r.remainder), 0, "remainder closed");
   assert.ok(vp > 0 && vr > 0, "positive volumes " + vp + " " + vr);
   assert.ok(Math.abs(vp + vr - v0) < 1e-6 * v0, "volumes sum: " + (vp + vr) + " vs " + v0);
+  // I1: only the affected faces are re-triangulated — the remainder's surface
+  // (without the pocket's own skin + wall triangles, which it must carry)
+  // stays near the original size and keeps every other face's paint tree
+  // verbatim. Before I1 the remainder was the whole conformed surface (4.5x).
+  const pocketTris = r.debug.tris.length / 3;
+  assert.ok(r.remainder.nf - pocketTris < 1.5 * mesh.nf, "remainder surface " + (r.remainder.nf - pocketTris) + " faces vs original " + mesh.nf);
+  assert.ok(r.remainder.nf < 2 * mesh.nf, "remainder " + r.remainder.nf + " faces vs original " + mesh.nf);
+  const kept = new Map(); let trees = 0;
+  for (let f = 0; f < mesh.nf; f++) if (!r.debug.affected[f] && M.Paint.solidState(mesh.paints[f]) < 0) { kept.set(mesh.paints[f], (kept.get(mesh.paints[f]) || 0) + 1); trees++; }
+  assert.ok(trees > 0, "some unaffected face carries a paint tree");
+  const got = new Map();
+  for (const p of r.remainder.paints) if (kept.has(p)) got.set(p, (got.get(p) || 0) + 1);
+  for (const [p, n] of kept) assert.strictEqual(got.get(p), n, "paint tree carried verbatim: " + p);
+  console.log("# " + seed + ": affected " + r.info.affectedFaces + ", remainder nf " + r.remainder.nf + ", part nf " + r.part.nf + ", kept trees " + trees);
   const v = validity(M, mesh, r);
   assert.ok(v.plugVertices > 0);
   assert.strictEqual(v.outside, 0, "plug vertices outside the original solid");

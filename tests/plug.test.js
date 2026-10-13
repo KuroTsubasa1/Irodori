@@ -282,3 +282,24 @@ test("plug gate: tiny deep triangle through a face is a crossing; a surface-laye
   assert.strictEqual(Split._plugIntersects(cube, grid, [0, 1, 2], pos, () => 1, canon, tol), true, "deep: penetration");
   assert.strictEqual(Split._plugIntersects(cube, grid, [0, 1, 2], pos, () => 0, canon, tol), false, "surface layer: contact");
 });
+
+// Only the affected faces (region + T-junction closure) are re-triangulated:
+// every other face of the remainder is its original triangle carrying its
+// original paint string, so far-away paint trees survive verbatim.
+test("plugSolids: faces outside the affected set keep their triangle and paint string", () => {
+  const { Cleanup, Split, MeshGeo, Paint } = loadModules();
+  const box = makeGridBox(4, 4, 4, 4);
+  const region = paintWhere(box, (x, y, z) => z === 4 && x > 1 && x < 3 && y > 1 && y < 3, 1);
+  const P = box.positions;
+  const far = [...Array(box.nf).keys()].find((f) => P[box.v1[f] * 3 + 2] === 0 && P[box.v2[f] * 3 + 2] === 0 && P[box.v3[f] * 3 + 2] === 0);
+  const L0 = { leaf: true, state: 0 }, L2 = { leaf: true, state: 2 };
+  const tree = Paint.encode({ leaf: false, split: 3, special: 0, kids: [L0, L2, L0, { leaf: false, split: 3, special: 1, kids: [L2, L0, L0, L2] }] });
+  box.paints[far] = tree;
+  const r = Split.plugSolids(box, regionOf(Cleanup, box, 1), { depth: 0.5 });
+  assert.ok(!r.error, r.error);
+  closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
+  assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 64) < 1e-6);
+  assert.strictEqual(r.remainder.paints.filter((p) => p === tree).length, 1, "split paint string carried verbatim");
+  const plug = r.part.nf - region.length; // walls + skins
+  assert.strictEqual(r.remainder.nf, box.nf - region.length + plug, "remainder = original - region + plug");
+});

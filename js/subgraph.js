@@ -99,6 +99,11 @@
       const m = vmap.get(k);
       return m === undefined ? -1 : m;
     };
+    // welded id of a point (e.g. an original face corner), or -1
+    const vid = (x, y, z) => {
+      const m = vmap.get(q(x) + "_" + q(y) + "_" + q(z));
+      return m === undefined ? -1 : m;
+    };
 
     // register adjacency, splitting an edge at any existing midpoint (T-junctions)
     const edge = new Map(); // key -> first sub-tri, or -1 once paired
@@ -147,7 +152,7 @@
 
     mesh._sub = {
       start, list, subLeaf, subFace, trees, cen, NS,
-      sv, vx: cx, vy: cy, vz: cz, NV, midOf,
+      sv, vx: cx, vy: cy, vz: cz, NV, midOf, vid,
     };
     return mesh._sub;
   }

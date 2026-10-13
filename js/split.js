@@ -427,6 +427,46 @@
     return false;
   }
 
+  // The faces whose conformed triangulation must replace the original
+  // triangle: the region's faces plus, transitively, every face sharing an
+  // edge that carries a T-junction midpoint with an affected face (a kept
+  // original triangle next to a conformed one would leave a T-junction).
+  // corner: welded sub-graph id of every original face corner (the conformed
+  // triangles index the same ids, so kept and conformed faces weld).
+  function affectedFaces(mesh, g, subs) {
+    const nf = mesh.nf, P = mesh.positions, NVo = P.length / 3;
+    const vmapO = new Int32Array(NVo).fill(-2);
+    const corner = new Int32Array(nf * 3);
+    const affected = new Uint8Array(nf);
+    const wid = (v) => { if (vmapO[v] === -2) vmapO[v] = g.vid(P[v * 3], P[v * 3 + 1], P[v * 3 + 2]); return vmapO[v]; };
+    const edges = new Map(); // welded undirected edge -> faces
+    const NV = g.NV;
+    for (let f = 0; f < nf; f++) {
+      const c = [wid(mesh.v1[f]), wid(mesh.v2[f]), wid(mesh.v3[f])];
+      corner[f * 3] = c[0]; corner[f * 3 + 1] = c[1]; corner[f * 3 + 2] = c[2];
+      if (c[0] < 0 || c[1] < 0 || c[2] < 0) { affected[f] = 1; continue; } // corner not in the graph: conform it
+      for (let k = 0; k < 3; k++) {
+        const u = c[k], v = c[(k + 1) % 3], key = u < v ? u * NV + v : v * NV + u;
+        const L = edges.get(key);
+        if (L) L.push(f); else edges.set(key, [f]);
+      }
+    }
+    const stack = [];
+    for (let f = 0; f < nf; f++) if (affected[f]) stack.push(f);
+    for (const s of subs) { const f = g.subFace[s]; if (!affected[f]) { affected[f] = 1; stack.push(f); } }
+    while (stack.length) {
+      const f = stack.pop();
+      for (let k = 0; k < 3; k++) {
+        const u = corner[f * 3 + k], v = corner[f * 3 + (k + 1) % 3];
+        if (u < 0 || v < 0) continue;
+        const m = g.midOf(u, v);
+        if (m < 0 || m === u || m === v) continue;
+        for (const h of edges.get(u < v ? u * NV + v : v * NV + u)) if (!affected[h]) { affected[h] = 1; stack.push(h); }
+      }
+    }
+    return { affected, corner };
+  }
+
   // Volumetric split: the region as a solid plug (patch + inward wall + skin)
   // and the remainder with the matching pocket. Both are plain document meshes.
   // See docs/superpowers/specs/2026-10-13-volumetric-split-design.md.
@@ -462,25 +502,35 @@
     const pocketState = majorityBorderColor(mesh, g, { subs, state: partState });
     const solid = (st) => Paint.encode({ leaf: true, state: st });
     const { tri, triSub, nT } = conf;
-    // one output mesh from id triples + per-triangle states (compact vertex ids)
-    const emit = (F, states) => {
+    // one output mesh from id triples + per-triangle paint strings (compact vertex ids)
+    const emit = (F, paints) => {
       const remap = new Map(), xyz = [];
       const nf = F.length / 3, v1 = new Int32Array(nf), v2 = new Int32Array(nf), v3 = new Int32Array(nf);
       const lid = (id) => { let i = remap.get(id); if (i === undefined) { i = remap.size; remap.set(id, i); xyz.push(...plug.pos(id)); } return i; };
       for (let f = 0; f < nf; f++) { v1[f] = lid(F[f * 3]); v2[f] = lid(F[f * 3 + 1]); v3[f] = lid(F[f * 3 + 2]); }
-      return { positions: Float32Array.from(xyz), nf, v1, v2, v3, paints: states.map(solid) };
+      return { positions: Float32Array.from(xyz), nf, v1, v2, v3, paints };
     };
+    // Only AFFECTED faces are re-triangulated (conformed); every other face of
+    // the remainder is its original triangle with its original paint string.
+    const { affected, corner } = affectedFaces(mesh, g, subs);
+    info.affectedFaces = affected.reduce((n, a) => n + a, 0);
     const PF = [], PS = [], RF = [], RS = [];
     const isPatch = new Int8Array(nT).fill(-1); // 1: patch kept in the part, 2: cancelled patch (-> remainder), -1: remainder
     field.pTris.forEach((t, j) => { isPatch[t] = plug.cancelled[j] ? 2 : 1; });
     for (let t = 0; t < nT; t++) {
-      const st = g.subLeaf[triSub[t]].state;
-      if (isPatch[t] === 1) { PF.push(tri[t * 3], tri[t * 3 + 1], tri[t * 3 + 2]); PS.push(st); }
-      else { RF.push(tri[t * 3], tri[t * 3 + 1], tri[t * 3 + 2]); RS.push(st); } // remainder + cancelled patch
+      if (!affected[g.subFace[triSub[t]]]) continue;
+      const p = solid(g.subLeaf[triSub[t]].state);
+      if (isPatch[t] === 1) { PF.push(tri[t * 3], tri[t * 3 + 1], tri[t * 3 + 2]); PS.push(p); }
+      else { RF.push(tri[t * 3], tri[t * 3 + 1], tri[t * 3 + 2]); RS.push(p); } // remainder + cancelled patch
     }
+    for (let f = 0; f < mesh.nf; f++) {
+      if (affected[f]) continue;
+      RF.push(corner[f * 3], corner[f * 3 + 1], corner[f * 3 + 2]); RS.push(mesh.paints[f]);
+    }
+    const partP = solid(partState), pocketP = solid(pocketState);
     for (const L of [plug.walls, plug.skins]) for (let i = 0; i < L.length; i += 3) {
-      PF.push(L[i], L[i + 1], L[i + 2]); PS.push(partState);
-      RF.push(L[i], L[i + 2], L[i + 1]); RS.push(pocketState);
+      PF.push(L[i], L[i + 1], L[i + 2]); PS.push(partP);
+      RF.push(L[i], L[i + 2], L[i + 1]); RS.push(pocketP);
     }
     const part = emit(PF, PS), remainder = emit(RF, RS);
     const bad = (mm) => MeshGeo.checkClosed(mm) || !(MeshGeo.signedVolume(mm) > 0);
@@ -488,7 +538,7 @@
     const out = { part, remainder, info };
     if (opts && opts.debug) { // test hook: the new triangles (part winding) and where each plug vertex came from
       const src = plug.src;
-      out.debug = { tris: plug.walls.concat(plug.skins), pos: plug.pos, NI, source: (id) => (id < NI ? id : src[id - NI]), conf, subFace: g.subFace };
+      out.debug = { tris: plug.walls.concat(plug.skins), pos: plug.pos, NI, source: (id) => (id < NI ? id : src[id - NI]), conf, subFace: g.subFace, affected };
     }
     return out;
   }
