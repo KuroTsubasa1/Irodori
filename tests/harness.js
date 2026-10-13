@@ -346,4 +346,36 @@ function makePocketBox() {
   return { nf: v1.length, positions: new Float32Array(pos), v1: Int32Array.from(v1), v2: Int32Array.from(v2), v3: Int32Array.from(v3), paints: v1.map(() => ""), side };
 }
 
-module.exports = { makePocketBox, makeUChannel, makeGridBox, makeRoofPrism, loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeClosedCube, makeBentStrip, makeBigTriangle, directedViolations, signedVolume };
+// Closed "height-field box": top surface z = zfn(x, y) over an n x n grid on
+// [0,size]^2, four gridded side walls down to z = 0, gridded flat bottom.
+// Vertices welded by coordinate (boundary rows shared), outward-wound,
+// mesh.top[f] = true for top-surface faces. zfn must stay > 0.
+function makeHeightBox(n, size, zfn) {
+  const pos = [], key = new Map(), v1 = [], v2 = [], v3 = [], top = [];
+  const vid = (x, y, z) => {
+    const k = x.toFixed(9) + "," + y.toFixed(9) + "," + z.toFixed(9);
+    let i = key.get(k);
+    if (i === undefined) { i = pos.length / 3; key.set(k, i); pos.push(x, y, z); }
+    return i;
+  };
+  const g = (i) => (size * i) / n;
+  const T = (i, j) => vid(g(i), g(j), zfn(g(i), g(j))), B = (i, j) => vid(g(i), g(j), 0);
+  const tri = (a, b, c, t) => { v1.push(a); v2.push(b); v3.push(c); top.push(t); };
+  for (let i = 0; i < n; i++) for (let j = 0; j < n; j++) {
+    tri(T(i, j), T(i + 1, j), T(i + 1, j + 1), true); tri(T(i, j), T(i + 1, j + 1), T(i, j + 1), true);   // +z
+    tri(B(i, j), B(i + 1, j + 1), B(i + 1, j), false); tri(B(i, j), B(i, j + 1), B(i + 1, j + 1), false); // -z
+  }
+  for (let k = 0; k < n; k++) { // walls, outward: y=0 (-y), x=size (+x), y=size (+y), x=0 (-x)
+    tri(B(k, 0), B(k + 1, 0), T(k + 1, 0), false); tri(B(k, 0), T(k + 1, 0), T(k, 0), false);
+    tri(B(n, k), B(n, k + 1), T(n, k + 1), false); tri(B(n, k), T(n, k + 1), T(n, k), false);
+    tri(B(k + 1, n), B(k, n), T(k, n), false); tri(B(k + 1, n), T(k, n), T(k + 1, n), false);
+    tri(B(0, k + 1), B(0, k), T(0, k), false); tri(B(0, k + 1), T(0, k), T(0, k + 1), false);
+  }
+  return {
+    nf: v1.length, positions: new Float32Array(pos),
+    v1: Int32Array.from(v1), v2: Int32Array.from(v2), v3: Int32Array.from(v3),
+    paints: v1.map(() => ""), top,
+  };
+}
+
+module.exports = { makeHeightBox, makePocketBox, makeUChannel, makeGridBox, makeRoofPrism, loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeClosedCube, makeBentStrip, makeBigTriangle, directedViolations, signedVolume };

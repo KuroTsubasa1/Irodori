@@ -1,6 +1,6 @@
 const test = require("node:test");
 const assert = require("node:assert");
-const { loadModules, makeGridBox, makeRoofPrism, makeUChannel, makePocketBox, makeBentStrip, signedVolume } = require("./harness");
+const { loadModules, makeGridBox, makeRoofPrism, makeUChannel, makePocketBox, makeHeightBox, signedVolume } = require("./harness");
 
 const flat = (m) => { const I = []; for (let f = 0; f < m.nf; f++) I.push(m.v1[f], m.v2[f], m.v3[f]); return I; };
 const vol = (m) => signedVolume(flat(m), m.positions);
@@ -39,84 +39,41 @@ test("fixtures: grid box and roof prism are closed with the expected volume", ()
   assert.strictEqual(roof.nf, 8 * 16);
 });
 
-test("patchBoundary: one surface-directed loop around a central top block", () => {
+test("plugField: flat interior -> straight down, s = depth; slab clamps to half thickness", () => {
   const { Cleanup, Split } = loadModules();
-  const box = makeGridBox(4, 4, 4, 4);
-  paintWhere(box, (x, y, z) => z === 4 && x > 1 && x < 3 && y > 1 && y < 3, 1);
-  const subs = regionOf(Cleanup, box, 1);
-  assert.strictEqual(subs.length, 8);
-  const g = Cleanup.buildSubGraph(box);
-  const b = Split.patchBoundary(box, subs, g);
-  assert.strictEqual(b.pinch, false);
-  assert.strictEqual(b.loops.length, 1);
-  assert.strictEqual(b.loops[0].length, 8);
-  // consecutive pairs follow the surface direction recorded in surfDir
-  const L = b.loops[0];
-  for (let i = 0; i < L.length; i++) {
-    const u = L[i], v = L[(i + 1) % L.length];
-    assert.strictEqual(b.surfDir.get(u < v ? u + "_" + v : v + "_" + u), u + ">" + v);
-  }
-});
-
-test("patchBoundary flags a pinch (two holes meeting at a vertex)", () => {
-  const { Cleanup, Split } = loadModules();
-  const box = makeGridBox(4, 4, 4, 4);
-  const hole = (x, y) => (x > 1 && x < 2 && y > 1 && y < 2) || (x > 2 && x < 3 && y > 2 && y < 3);
-  paintWhere(box, (x, y, z) => z === 4 && !hole(x, y), 1);
-  const subs = regionOf(Cleanup, box, 1);
-  assert.strictEqual(Split.patchBoundary(box, subs, Cleanup.buildSubGraph(box)).pinch, true);
-});
-
-test("rimFrame: flat interior rim -> straight down, t = depth; slab clamps to half thickness", () => {
-  const { Cleanup, Split, MeshGeo } = loadModules();
   for (const [sz, depth, want] of [[4, 0.5, 0.5], [0.5, 10, 0.25]]) {
     const box = makeGridBox(4, 4, 4, sz);
     paintWhere(box, (x, y, z) => z === sz && x > 1 && x < 3 && y > 1 && y < 3, 1);
     const subs = regionOf(Cleanup, box, 1);
-    const g = Cleanup.buildSubGraph(box);
-    const b = Split.patchBoundary(box, subs, g);
-    const fr = Split.rimFrame(box, g, b.loops, depth, MeshGeo.faceGrid(box));
-    for (const gid of b.loops[0]) {
-      const d = fr.dir.get(gid);
+    const fr = Split.plugField(box, subs, depth);
+    assert.strictEqual(fr.t.size, 9, "3x3 patch vertices");
+    for (const [gid, d] of fr.dir) {
       assert.ok(Math.abs(d[0]) < 1e-6 && Math.abs(d[1]) < 1e-6 && Math.abs(d[2] + 1) < 1e-6, "inward -z: " + d);
-      assert.ok(Math.abs(fr.t.get(gid) - want) < 1e-6, "t=" + fr.t.get(gid) + " want " + want);
+      assert.ok(Math.abs(fr.t.get(gid) - want) < 1e-6, "s=" + fr.t.get(gid) + " want " + want);
     }
   }
 });
 
-test("rimFrame: cross-section rim (upper half of the box) gets no wall", () => {
-  const { Cleanup, Split, MeshGeo } = loadModules();
-  const box = makeGridBox(4, 4, 4, 4);
-  paintWhere(box, (x, y, z) => z > 2, 1); // top + upper two rows of every side
-  const subs = regionOf(Cleanup, box, 1);
-  const g = Cleanup.buildSubGraph(box);
-  const b = Split.patchBoundary(box, subs, g);
-  assert.strictEqual(b.loops.length, 1);
-  const fr = Split.rimFrame(box, g, b.loops, 1, MeshGeo.faceGrid(box));
-  for (const gid of b.loops[0]) assert.ok(fr.t.get(gid) < 1e-6, "t " + fr.t.get(gid));
-});
-
-test("rimNormals: a T-junction midpoint on a crease sees both sides of the rim", () => {
-  const { Cleanup, Split, Paint } = loadModules();
-  const mesh = makeBentStrip(90, false);
-  const L = { leaf: true, state: 1 };
-  mesh.paints = ["4", Paint.encode({ leaf: false, split: 3, special: 0, kids: [L, L, L, L] }), "", ""];
-  const subs = regionOf(Cleanup, mesh, 1);
-  const g = Cleanup.buildSubGraph(mesh);
-  const b = Split.patchBoundary(mesh, subs, g);
-  assert.strictEqual(b.pinch, false);
-  const loop = b.loops[0];
-  const N = Split.rimNormals(mesh, g, new Set(loop));
-  const M = loop.find((id) => Math.abs(g.vx[id] - 1) < 1e-6 && Math.abs(g.vy[id] - 1) < 1e-6 && Math.abs(g.vz[id]) < 1e-6);
-  assert.ok(M !== undefined, "midpoint M on the hinge is a rim vertex");
-  const P = mesh.positions, q = (i) => [P[i * 3], P[i * 3 + 1], P[i * 3 + 2]];
-  const a = q(mesh.v1[2]), bb = q(mesh.v2[2]), c = q(mesh.v3[2]);
-  const u = [bb[0] - a[0], bb[1] - a[1], bb[2] - a[2]], w = [c[0] - a[0], c[1] - a[1], c[2] - a[2]];
-  let n2 = [u[1] * w[2] - u[2] * w[1], u[2] * w[0] - u[0] * w[2], u[0] * w[1] - u[1] * w[0]];
-  const l2 = Math.hypot(...n2); n2 = n2.map((x) => x / l2);
-  const n = N.get(M);
-  assert.ok(n[2] > 0.3, "+z component " + n);
-  assert.ok(n[0] * n2[0] + n[1] * n2[1] + n[2] * n2[2] > 0.3, "band-2 component " + n + " vs " + n2);
+// The depth ramps to 0 where D would slide along ANY incident face: the gable
+// ends of the ridge are vertical, D is -z, so the rim vertices on the gable
+// edges get no depth (else the wall would lie in the gable plane).
+test("plugField: transversality is checked against both rim sides (vertical gable edge gets s = 0)", () => {
+  const { Cleanup, Split } = loadModules();
+  const roof = makeRoofPrism(4, 3, 2, 4);
+  const P = roof.positions;
+  for (let f = 0; f < roof.nf; f++) {
+    const y = (P[roof.v1[f] * 3 + 1] + P[roof.v2[f] * 3 + 1] + P[roof.v3[f] * 3 + 1]) / 3;
+    if ((roof.side[f] === "left" || roof.side[f] === "right") && y > 1.5) roof.paints[f] = "4";
+  }
+  const g = Cleanup.buildSubGraph(roof);
+  const fr = Split.plugField(roof, regionOf(Cleanup, roof, 1), 10);
+  let ends = 0, mid = 0;
+  for (const [gid, s] of fr.t) {
+    const z = g.vz[gid];
+    if (z < 1e-6 || z > 2 - 1e-6) { ends++; assert.ok(s < 1e-9, "gable vertex depth " + s); }
+    else if (Math.abs(z - 1) < 1e-6) { mid++; assert.ok(s > 0.1, "mid-length vertex depth " + s); }
+  }
+  assert.ok(ends > 0 && mid > 0);
 });
 
 const closed = (MeshGeo, m, label) => assert.strictEqual(MeshGeo.checkClosed(m), 0, label + " closed");
@@ -149,21 +106,24 @@ test("plugSolids: slab clamps depth to half thickness", () => {
   assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 8) < 1e-6);
 });
 
-test("plugSolids: cross-section rim adds no wall (part == lens)", () => {
+// Bottom = displaced patch ("skin"): a region spanning a cross-section (top +
+// upper half of the sides) becomes a uniform-depth cup, not a lens; the rim
+// wall is horizontal, so nothing goes below the rim plane.
+test("plugSolids: cross-section region becomes a uniform-depth cup", () => {
   const { Cleanup, Split, MeshGeo } = loadModules();
   const box = makeGridBox(4, 4, 4, 4);
-  const faces = paintWhere(box, (x, y, z) => z > 2, 1);
-  const r = Split.plugSolids(box, regionOf(Cleanup, box, 1), { depth: 1, method: "earcut" });
+  paintWhere(box, (x, y, z) => z > 2, 1); // top + upper two rows of every side
+  const r = Split.plugSolids(box, regionOf(Cleanup, box, 1), { depth: 1 });
   assert.ok(!r.error, r.error);
+  assert.strictEqual(r.info.halvings, 0);
   closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
-  assert.ok(Math.abs(vol(r.part) - 32) < 1e-6, "lens volume " + vol(r.part));
-  assert.ok(Math.abs(vol(r.remainder) - 32) < 1e-6);
-  // no wall: every part vertex is on the original surface (z >= 2)
-  for (let i = 2; i < r.part.positions.length; i += 3) assert.ok(r.part.positions[i] >= 2 - 1e-9);
-  assert.ok(r.part.nf >= faces.length, "patch kept");
+  assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 64) < 1e-6);
+  // thinner than the 32-unit lens, thicker than a 1-unit skin over the 32 sq. units of patch minus corner losses
+  assert.ok(vol(r.part) > 20 && vol(r.part) < 32 - 1, "cup volume " + vol(r.part));
+  for (let i = 2; i < r.part.positions.length; i += 3) assert.ok(r.part.positions[i] >= 2 - 1e-6, "below the rim plane");
 });
 
-test("plugSolids: band over a convex ridge stays clean (clamp + cos weight keep walls apart)", () => {
+test("plugSolids: band over a convex ridge stays clean", () => {
   const { Cleanup, Split, MeshGeo } = loadModules();
   const roof = makeRoofPrism(4, 3, 2, 4);
   const P = roof.positions;
@@ -179,38 +139,63 @@ test("plugSolids: band over a convex ridge stays clean (clamp + cos weight keep 
   assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 12) < 1e-6);
 });
 
-test("plugSolids: a through-groove gets a trough plug that follows the groove", () => {
+// 64 sub-triangles per face (three 4-way levels): the coarse fixtures have
+// every vertex on a sharp crease, where transversality forces depth 0.
+const finePaint = (Paint) => { const L = { leaf: true, state: 1 }, q = (k) => ({ leaf: false, split: 3, special: 0, kids: [k, k, k, k] }); return Paint.encode(q(q(q(L)))); };
+
+test("plugSolids: a through-groove gets a liner that follows the groove", () => {
+  const { Cleanup, Split, MeshGeo, Paint } = loadModules();
+  for (const depth of [0.25, 5]) {
+    const m = makeUChannel(4);
+    for (let f = 0; f < m.nf; f++) if (m.edge[f] === 4 || m.edge[f] === 5 || m.edge[f] === 6) m.paints[f] = finePaint(Paint); // groove walls + floor
+    const r = Split.plugSolids(m, regionOf(Cleanup, m, 1), { depth });
+    assert.ok(!r.error, r.error);
+    assert.strictEqual(r.info.halvings, 0);
+    closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
+    assert.ok(vol(r.part) > 0);
+    assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 48) < 1e-6);
+  }
+});
+
+// The old cap-on-offset-loop bottom closed the pocket's AIR and was refused as
+// inside-out; the skin lines the pocket instead.
+test("plugSolids: a closed pocket region becomes a liner (no longer refused)", () => {
+  const { Cleanup, Split, MeshGeo, Paint } = loadModules();
+  for (const depth of [0.3, 5]) {
+    const m = makePocketBox();
+    for (let f = 0; f < m.nf; f++) if (m.side[f] === "wall" || m.side[f] === "floor") m.paints[f] = finePaint(Paint);
+    const r = Split.plugSolids(m, regionOf(Cleanup, m, 1), { depth });
+    assert.ok(!r.error, r.error);
+    closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
+    assert.ok(vol(r.part) > 0 && vol(r.remainder) > 0);
+    assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 56) < 1e-6);
+  }
+});
+
+// Fractal paint rims touch themselves at isolated vertices (1-13 per region on
+// the sample); the old pinch refusal rejected all such regions. Each wedge of
+// patch triangles around a pinch vertex gets its own skin copy instead.
+test("plugSolids: a region touching itself at a vertex splits (per-wedge skin copies)", () => {
   const { Cleanup, Split, MeshGeo } = loadModules();
-  const m = makeUChannel(4);
-  for (let f = 0; f < m.nf; f++) if (m.edge[f] === 4 || m.edge[f] === 5 || m.edge[f] === 6) m.paints[f] = "4"; // groove walls + floor
-  const r = Split.plugSolids(m, regionOf(Cleanup, m, 1), { depth: 5 });
-  assert.ok(!r.error, r.error);
-  assert.strictEqual(r.info.halvings, 0);
-  closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
-  assert.ok(vol(r.part) > 0);
-  assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 48) < 1e-6);
-});
-
-test("plugSolids: a closed pocket region runs halving to the shell and is refused as inside-out", () => {
-  const { Cleanup, Split } = loadModules();
-  const m = makePocketBox();
-  for (let f = 0; f < m.nf; f++) if (m.side[f] === "wall" || m.side[f] === "floor") m.paints[f] = "4";
-  const r = Split.plugSolids(m, regionOf(Cleanup, m, 1), { depth: 5 });
-  assert.match(r.error, /clean solid/);
-  assert.strictEqual(r.info.shell, true);
-  assert.strictEqual(r.info.halvings, 4);
-});
-
-test("plugSolids refuses pinch, whole-mesh and empty regions", () => {
-  const { Cleanup, Split } = loadModules();
   const box = makeGridBox(4, 4, 4, 4);
   const hole = (x, y) => (x > 1 && x < 2 && y > 1 && y < 2) || (x > 2 && x < 3 && y > 2 && y < 3);
   paintWhere(box, (x, y, z) => z === 4 && !hole(x, y), 1);
-  assert.match(Split.plugSolids(box, regionOf(Cleanup, box, 1), { depth: 1 }).error, /touches itself/);
+  const r = Split.plugSolids(box, regionOf(Cleanup, box, 1), { depth: 1 });
+  assert.ok(!r.error, r.error);
+  closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
+  assert.ok(vol(r.part) > 0);
+  assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - 64) < 1e-6);
+});
+
+test("plugSolids refuses whole-mesh, empty and zero-depth requests", () => {
+  const { Cleanup, Split } = loadModules();
   const all = makeGridBox(2, 2, 2, 2);
   paintWhere(all, () => true, 1);
   assert.match(Split.plugSolids(all, regionOf(Cleanup, all, 1), { depth: 1 }).error, /whole object/);
   assert.match(Split.plugSolids(all, [], { depth: 1 }).error, /Nothing/);
+  const box = makeGridBox(4, 4, 4, 4);
+  paintWhere(box, (x, y, z) => z === 4 && x > 1 && x < 3 && y > 1 && y < 3, 1);
+  assert.match(Split.plugSolids(box, regionOf(Cleanup, box, 1), { depth: 0 }).error, /depth/);
 });
 
 test("plugSolids: refined (subdivided) paint splits to closed outputs", () => {
@@ -240,4 +225,44 @@ test("plugSolids: chained split -> split on remainder -> plane cut conserves vol
   for (const m of pieces) closed(MeshGeo, m, "piece");
   const total = pieces.reduce((s, m) => s + vol(m), 0);
   assert.ok(Math.abs(total - 64) < 1e-5, "total " + total);
+});
+
+// Real-data failure class (sample belly: halvings 4 -> shell -> refused). A
+// region with a staircase rim on a curved surface: the old per-vertex rim
+// normal/depth tangled the offset curve (rim edges << depth), the Liepa cap of
+// the jagged offset loop folded, and the shell's cap diagonals duplicated
+// surface edges. Skin + Euclidean-smooth field: clean at full depth.
+test("plugSolids: staircase rim on a curved surface splits cleanly at full depth", () => {
+  const { Cleanup, Split, MeshGeo } = loadModules();
+  const m = makeHeightBox(24, 4, (x, y) => 4 + 0.6 * Math.cos((x - 2) * 0.7) * Math.cos((y - 2) * 0.7));
+  const P = m.positions;
+  for (let f = 0; f < m.nf; f++) {
+    if (!m.top[f]) continue;
+    const a = m.v1[f] * 3, b = m.v2[f] * 3, c = m.v3[f] * 3;
+    const x = (P[a] + P[b] + P[c]) / 3 - 2, y = (P[a + 1] + P[b + 1] + P[c + 1]) / 3 - 2;
+    if (Math.hypot(x, y) < 1.2 + 0.25 * Math.sin(5 * Math.atan2(y, x))) m.paints[f] = "4";
+  }
+  const before = vol(m);
+  const r = Split.plugSolids(m, regionOf(Cleanup, m, 1), { depth: 1 });
+  assert.ok(!r.error, r.error + " " + JSON.stringify(r.info));
+  assert.strictEqual(r.info.halvings, 0);
+  closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
+  assert.ok(vol(r.part) > 2, "plug has real depth: " + vol(r.part));
+  assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - before) < 1e-5);
+});
+
+// A sharp V-notch inside the region: the valley's faces nearly face each
+// other, so D slides along them (transversality 0) and the valley line stays
+// welded while both flanks keep depth — patch and both skins would share the
+// valley edges (each used 4x). The valley ends are un-welded instead.
+test("plugSolids: a welded crease line inside the region does not pinch the part", () => {
+  const { Cleanup, Split, MeshGeo } = loadModules();
+  const m = makeHeightBox(40, 4, (x) => 4 - Math.max(0, 1 - Math.abs(x - 2) / 0.1));
+  for (let f = 0; f < m.nf; f++) if (m.top[f]) m.paints[f] = "4";
+  const before = vol(m);
+  const r = Split.plugSolids(m, regionOf(Cleanup, m, 1), { depth: 0.3 });
+  assert.ok(!r.error, r.error + " " + JSON.stringify(r.info));
+  closed(MeshGeo, r.part, "part"); closed(MeshGeo, r.remainder, "remainder");
+  assert.ok(vol(r.part) > 1, "plug volume " + vol(r.part));
+  assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - before) < 1e-5);
 });
