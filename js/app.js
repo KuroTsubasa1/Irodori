@@ -247,6 +247,7 @@
       doc.filaments.forEach((f, i) => (f.index = i + 1));
       pushHistory("Delete color");
       buildPalette(); // re-selects a valid paint colour
+      buildObjects(); // part swatches/names follow the remapped states
       render(null);
       updateStats();
       toast("Color removed · repainted to default where used");
