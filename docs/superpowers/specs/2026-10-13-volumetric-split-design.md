@@ -39,100 +39,122 @@ so every other tool (paint, Cut, Split again) works on them unchanged.
 - Click applies immediately (no place-then-adjust): the plug is hidden
   inside the model, nothing to judge visually; undo is one step.
 - Depth is a user value in mm; per-vertex clamp at **half** the local
-  thickness; wall only grows where the lens would be knife-edged.
-- Bottom cap: `liepa` default; existing `Cap method` dropdown kept.
+  thickness.
+- **Revised in task 6 (real data):** the first implementation (per-rim-vertex
+  offset + Liepa cap of the offset loop + a `t = 0` "shell" fallback + pinch
+  refusal) refused *every* region of the sample model. The bottom is now the
+  **displaced patch** ("skin") on a spatially smooth displacement field; see
+  *Why not a cap* below. The `Cap method` dropdown no longer affects Split
+  (`opts.method` is accepted and ignored).
 
 ## Geometry — `Split.plugSolids(mesh, subs, opts)` (js/split.js)
 
-`opts = { depth, method }`. Returns `{ part, remainder, info }` — two document
+`opts = { depth }`. Returns `{ part, remainder, info }` — two document
 meshes `{ positions, nf, v1, v2, v3, paints }` (the app sets
 `part.part = { label, state }`)
-— or `{ error }` with a user-facing reason.
+— or `{ error }` with a user-facing reason. `info = { halvings, shell:
+false, faces }` (`shell` is kept for the app's toast and is always false).
 
 ### Shared conformed surface
 
-Both meshes come from the conformed sub-triangle surface (existing
-`openSurface`: refined leaves become real triangles, T-junctions resolved
-through `midOf`), so patch and remainder share identical welded rim
-vertices. The patch's boundary loops come from the existing `bEdge` walk
-(`solidFromSubs` boundary code, extracted into `patchBoundary(mesh, subs, g)`
-→ `{ loops: [[gid...]], surfDir: Map(edgeKey → "u>v"), pinch: bool }`).
+Both meshes come from one conformed surface of every sub-triangle
+(`conformedSurface(g)`, cached on the sub graph: refined leaves become real
+triangles; a sub whose edges carry T-junction midpoints is fanned from its
+centroid, which gets its own id). Patch and remainder index the same ids, so
+the rim is welded by construction. No boundary loops are extracted.
 
-### Per-rim-vertex inward direction
+### Displacement field (`plugField`, exported for tests as `Split.plugField`)
 
-The full model normal at the rim vertex: area-weighted average over **all**
-incident sub-triangles (both sides of the rim), then smoothed along each
-rim loop with two 1-ring averaging passes (prevents zigzag walls on noisy
-rims). Inward direction `d_i = −n̂_i`.
+Every patch vertex `q` (welded vertices and T-junction centroids) moves to
+`q + s(q)·D(q)`.
 
-### Per-rim-vertex depth
+- **Direction** `D = −normalize(Σ w·N)`: area-weighted patch vertex normals
+  accumulated into voxels (cell `R/3`, ≤ 2·10⁶ cells), summed with the kernel
+  `w = (1 − d²/R²)²` over voxel centroids within `R = max(2·depth, 10⁻³·diag)`.
+  If the normals cancel, the vertex's own normal. `D` is smooth in *space*,
+  which is what keeps `s·|∇D| < 1` on fractal rims (0.004 mm rim edges vs a
+  3 mm depth: the old per-vertex normal had a Lipschitz constant of ~2600 on
+  the sample and tangled the offset curve). For a region small against `R`,
+  `D` is constant — a cookie-cutter extrusion.
+- **Depth** `s_raw = min(depth, 0.5 · t_hit) · τ`. `t_hit`: ray cast along `D`
+  against the parent faces, back-face hits only, `t > 10⁻⁴·diag` (unchanged
+  from v1). `τ = clamp((tr − 0.2) / 0.3, 0, 1)` with `tr` the least
+  `−n_f · D` over **every** sub incident to the vertex — both sides of the
+  rim — so the plug never slides along a face (a wall in a vertical gable
+  plane, a skin hugging a sharp crease).
+- **Lipschitz envelope** `s(q) = min_p (s_raw(p) + 0.5 · geodesic(p, q))`
+  (Dijkstra over the patch graph), so the skin cannot fold onto itself and
+  tapers (slope ≤ 0.5) into zero-depth zones.
 
-`t_i = min(depth, 0.5 · t_hit_i) · w_i`, where
+### Plug geometry (`buildPlug`, per depth scale)
 
-- `t_hit_i` — distance along `d_i` to the opposite surface: a ray cast
-  against the mesh's parent faces, accepting **back-face hits only** (the ray
-  starts inside the solid, so the far wall is hit from behind; this excludes
-  the near surface without an epsilon dance) and `t > 1e-4 · bboxDiag`. No
-  hit → `t_hit = ∞`. Acceleration: a uniform grid over face AABBs
-  (`Split.faceGrid(mesh)`, cell count ≈ cube root of face count per axis,
-  clamped 8…64), 3-D DDA ray march. Half the thickness is what stops facing
-  rim points from crossing each other on thin features.
-- `w_i = |cos θ_i|`, θ_i the angle between `n̂_i` and the loop's best-fit
-  plane normal (existing `Caps.bestFitPlane` on the loop's points). A
-  cross-section rim (ear tip, band around a leg) has `w ≈ 0` — the lens is
-  already a solid there, no wall is added. A shallow patch (belly spot) has
-  `w ≈ 1` — full plug. In between, the wall tapers continuously.
+- **Welding:** a vertex with `s·scale ≤ snap = 10⁻⁴·diag` keeps its surface
+  id. A patch triangle with three welded vertices is **cancelled** — it has no
+  thickness; it moves to the remainder unchanged (keeping its leaf color)
+  instead of being doubled by its skin. An *interior* edge with both ends
+  welded whose two triangles both keep a deep vertex would be shared by the
+  patch and both skins (edge used 4×, a zero-thickness "pinch line"); its
+  ends are un-welded to the snap depth, iterated until none is left.
+- **Per-wedge skin vertices:** around each vertex, patch triangles are
+  grouped into wedges (fans connected through edges at that vertex). Each
+  wedge gets its own skin copy, so a **pinch vertex** (the region touching
+  itself — 1–13 per fractal rim on the sample) yields two coincident copies
+  and both outputs stay edge-manifold.
+- **Wall:** for each rim edge (an edge of exactly one patch triangle) `u→v`
+  in that triangle's winding, `(v, u, u')` and `(v, u', v')`, skipping
+  triangles with a welded (repeated) id.
+- **Skin:** every non-cancelled patch triangle `(a, b, c)` → `(a', c', b')`.
+- Part = kept patch + wall + skin; remainder = rest of the surface +
+  cancelled patch + wall reversed + skin reversed.
 
-Offset point `p'_i = p_i + t_i · d_i`. When `t_i < 1e-6 · bboxDiag`,
-`p'_i` **is** `p_i` (same vertex id) so zero-depth stretches stay manifold.
+### Why not a cap (v1's bottom)
 
-### Wall and bottom
+Measured on the sample: Liepa's endpoint fans fold on weaving chains and its
+120-vertex coarse polygon spans the loop's fjords (1,000–64,000 crossing
+pairs per region even after smoothing the offset); earcut on a best-fit
+projection drops edges because the belly rim self-crosses 347 times in
+projection (4 at the best of 400 sampled directions); the centroid fan
+crosses the walls too. Any triangulation that uses only rim vertices of such
+a loop must fold. The skin reuses the patch's own triangulation, which is
+fold-free by construction when the field is Lipschitz.
 
-- For each surface-directed rim edge `u→v` (from `surfDir`): triangles
-  `(v, u, u')` and `(v, u', v')`, skipping any triangle with two equal ids.
-  This traverses the rim edge `v→u` (opposite the surface, so the edge is
-  used once each direction) and the offset edge `u'→v'`.
-- Bottom: `Caps.triangulateLoops(offsetLoops, getPt, method)` on the offset
-  loop(s), then `orientCapComponents` with the offset edges' directions
-  `u'→v'` as the "surface" direction, so the bottom traverses `v'→u'`. Loops
-  that collapsed entirely to the rim (all `t_i = 0`) are capped directly on
-  the rim, as today.
-- The part gets patch + wall + bottom; the remainder gets the rest of the
-  surface + wall reversed + bottom reversed. Wall/bottom coordinates and
-  bottom extra points are emitted identically into both.
+Consequences: a cross-section region (top + upper half of a box's sides)
+becomes a uniform-depth **cup** instead of a lens; a closed **pocket**
+becomes a **liner** (no longer refused); a large depth on a small feature
+degrades towards the cookie-cutter (`D` constant, faces parallel to `D` get
+no depth).
 
 ### Colors
 
 Patch and remainder surface triangles keep their leaf states (one solid
-paint string per triangle). Wall and bottom: the part's state in the part;
+paint string per triangle; cancelled patch triangles keep theirs in the
+remainder). Wall and skin: the part's state in the part;
 `majorityBorderColor` in the remainder.
 
 ## Robustness — refuse rather than ship garbage
 
-- **Self-intersection check** of wall + bottom triangles against each other
-  and against the patch triangles (grid-bucketed triangle–triangle test,
-  Möller; non-adjacent pairs only). On any intersection: halve every `t_i`
-  and rebuild wall + bottom, up to 4 times; final fallback `t_i = 0`
-  (today's lens) with toast *"Region too sharp for a plug — made a shell"*.
-  (In practice the clamp and the `|cos θ|` weight keep walls apart on convex
-  features — a band over a ridge yields a clean plug with no halving, and a
-  through-groove yields a trough-shaped plug because Liepa follows the
-  offset end paths. The case that does trigger halving is a **closed pocket**
-  (a dent): its rim is planar, so the bottom cap is flat and must cross the
-  pocket walls; halving runs to the shell, and the shell closes the AIR, which
-  the volume gate below refuses.)
-- **Watertight gate** on both outputs: every undirected edge used exactly
-  twice **and** traversed once in each direction (`MeshGeo.checkClosed`),
-  **and** positive signed volume (`MeshGeo.signedVolume > 0`, which rejects
-  inside-out shells of pocket-shaped regions). If either output fails,
-  nothing is applied; toast *"Couldn't make a clean solid here (pocket-shaped
-  or too sharp region)"*; the error result carries `info` so the halving
-  outcome stays observable. The existing `console.warn("cap may be
-  incomplete")` paths become refusals.
-- **Refusals** (`{ error }`): pinch topology (`pinch`) → *"Region touches
-  itself at a point — paint a wider bridge or gap"*; `subs` covers the whole
-  mesh → *"That's the whole object"*; empty region → *"Nothing to split
-  there"*.
+- **Self-intersection gate** of wall + skin triangles against each other and
+  against the original faces (grid-bucketed). Pairs sharing a vertex (copies
+  of one source vertex count as shared) are tested exactly: edge-adjacent →
+  only a flat fold overlaps (`MeshGeo.foldedPair`); vertex-adjacent → the far
+  edge of one piercing the other (`MeshGeo.segTriCross`); otherwise Möller
+  (`triTriIntersect`, with a scale-relative on-plane epsilon — the absolute
+  one reported near-parallel separated 0.005 mm triangles as crossing).
+  **Contact tolerance** `tol = 10⁻³·diag` (≈ 0.06 mm on the 63 mm sample,
+  below print resolution): a triangle whose vertices all lie within `tol` of
+  the surface is surface (not tested against the mesh or other such
+  triangles), and a crossing whose *penetration* (smallest push along either
+  plane normal that separates the pair) is ≤ `tol` is contact. On any
+  intersection: halve the scale and rebuild, up to 4 times; then refuse.
+  There is no shell fallback any more.
+- **Watertight gate** on both outputs (unchanged): `MeshGeo.checkClosed === 0`
+  and `MeshGeo.signedVolume > 0`; otherwise nothing is applied and the error
+  carries `info`. Toast *"Couldn't make a clean solid here (region too thin
+  or sharp for a plug)"*.
+- **Refusals** (`{ error }`): `subs` covers the whole mesh → *"That's the
+  whole object"*; empty region → *"Nothing to split there"*; depth ≤ 0 →
+  *"Set a split depth greater than 0"*. **Pinch is no longer refused**
+  (per-wedge copies, above).
 
 ## Tool flow (js/app.js, index.html)
 
@@ -143,8 +165,9 @@ paint string per triangle). Wall and bottom: the part's state in the part;
   `ensureSubGraphs`. On `{ error }`: toast, no history entry.
 - Panel: `Depth` — `<input type=number id="splitDepth">` (mm, step 0.1)
   linked to a range; default 3, min 0.3, max `modelSize / 2` (set on load).
-  Existing `Cap method` select stays; its `change` handler no longer re-caps
-  anything (only future splits). Hint text: *"Click a colored region to lift
+  Existing `Cap method` select stays (app.js still passes it) but, since
+  task 6, Split ignores it — the bottom is the skin, not a cap; the select
+  is now dead UI for Split (follow-up: hide or relabel it). Hint text: *"Click a colored region to lift
   it out as a solid part."*
 - Removed guards: *"Export or undo your split parts before cutting"* and the
   export dialog's dependence on `splitParts`.
@@ -182,32 +205,28 @@ Snapshots already store `meshList` + `synthetic` (plane cut needs it).
 
 ## Tests (tests/, Node harness)
 
-- **Flat-face plug:** closed cube, region = one triangle of the top face
-  (face 2), depth 0.5 → part and remainder: edge-twice, 0 directed
-  violations, positive volume, `vol(part) + vol(remainder) = 8 ± 1e-6`;
-  bottom vertices at `z = 2 − 0.5`.
-- **Far-wall clamp:** 4×4×0.5 slab, region = top face, depth 10 → bottom
-  at `z ≥ 0.25` (half thickness), volumes sum, no intersections.
-- **Knife-edge factor:** cube region = top face + upper half of the four
-  sides (cross-section rim at z=1) → zero wall triangles; part = lens.
-- **Convex ridge stays clean:** gridded roof prism, region = upper half of
-  both slopes → no halving, outputs closed, volumes sum to 12.
-- **Through-groove:** U-channel, region = groove walls + floor → trough plug,
-  no halving, closed, volumes sum to 48.
-- **Closed pocket refused:** pocket box, region = pocket walls + floor →
-  halving runs to the shell (`info.halvings === 4`, `info.shell === true`)
-  and the inside-out result is refused by the volume gate.
-- **Refusals:** pinch (two regions sharing one vertex) → `error`; whole
-  mesh → `error`; empty → `error`.
-- **Chained:** cube: split region A (top), then on the remainder split the
-  adjacent region B (one side face), then `PlaneCut.cutMesh` on the A part
-  → every mesh closed; total volume still 8.
-- **Refined paint:** `makeTJunction` region → both outputs closed.
-- **checkClosed** agrees with harness `directedViolations` on open-tube and
-  cube fixtures.
-- Browser (Playwright, sample model): belly spot plug; ear-tip split (no
-  wall); neck band split; paint over a part then split it again; undo
-  chain; export opens with N objects.
+- **Flat-face plug:** gridded box, region = central top block, depth 0.5 →
+  both outputs closed, volumes 2 + 62, skin at `z = 3.5`, no halving.
+- **Far-wall clamp:** 4×4×0.5 slab, depth 10 → `s = 0.25`, part volume 1.
+- **plugField:** flat interior → `D = −z`, `s = depth`; slab → `s = 0.25`;
+  ridge gable edges (vertical faces parallel to `D`) → `s = 0`.
+- **Cross-section region:** box top + upper half of the sides, depth 1 →
+  a cup, nothing below the rim plane, volumes sum to 64.
+- **Convex ridge stays clean:** roof prism, upper half of both slopes → no
+  halving, closed, volumes sum to 12.
+- **Through-groove / pocket** (64-sub refined paint — the coarse fixtures put
+  every vertex on a crease): liners, closed, volumes sum to 48 / 56.
+- **Pinch:** a region touching itself at a vertex splits, closed.
+- **Staircase rim on a curved surface** (`makeHeightBox`, the belly's failure
+  class: v1 refused it with `halvings 4, shell true`) → clean at full depth.
+- **Welded crease line:** sharp V-notch inside the region → no 4× edges.
+- **Refusals:** whole mesh, empty, depth 0.
+- **Chained** split → split on remainder → plane cut; **refined paint**.
+- **Sample model** (`tests/sample.test.js`, ~20 s): belly (seed 490285,
+  depth 3), an ear tip and the neck band → closed, positive, volume-exact.
+- Browser (Playwright, sample model): belly plug; ear-tip split; neck band
+  split; paint over a part then split it again; undo chain; export opens
+  with N objects.
 
 ## Non-goals
 
