@@ -36,7 +36,7 @@
   // ---------- snapshots / history ----------
   function snap() {
     return {
-      meshes: doc.meshes.map((m) => ({ paints: m.paints.slice(), dom: Int32Array.from(m.dom) })),
+      meshes: doc.meshes.map((m) => ({ paints: m.paints.slice(), dom: Int32Array.from(m.dom), part: m.part ? { ...m.part } : null })),
       filaments: doc.filaments.map((f) => ({ index: f.index, hex: f.hex })),
       meshList: doc.meshes.slice(),
       synthetic: !!doc.synthetic,
@@ -48,6 +48,7 @@
     doc.meshes.forEach((m, i) => {
       m.paints = state.meshes[i].paints.slice();
       m.dom = Int32Array.from(state.meshes[i].dom);
+      if ("part" in state.meshes[i]) m.part = state.meshes[i].part ? { ...state.meshes[i].part } : null;
       Cleanup.invalidateSub(m);
     });
     if (state.filaments) doc.filaments = state.filaments.map((f) => ({ index: f.index, hex: f.hex }));
@@ -79,6 +80,11 @@
   function colorName(s) {
     const idx = s === 0 ? doc.defaultExtruder : s;
     return doc.filaments[idx - 1] ? "Filament " + idx : "state " + s;
+  }
+  // Object name: a part's colour suffix is derived from its CURRENT state, so
+  // deleting/shifting a colour can never leave a stale label (Objects list + export).
+  function partLabel(m, i) {
+    return m.part ? "Part " + m.part.seq + " · " + colorName(m.part.state) : "Object " + (i + 1);
   }
   function toast(msg, isErr) {
     const t = $("toast");
@@ -231,7 +237,12 @@
     clearHoverPreview();
     busy("Removing color…", () => {
       const mapFn = (s) => (s === k ? 0 : s > k ? s - 1 : s);
-      for (const m of doc.meshes) Cleanup.remapStates(m, mapFn);
+      for (const m of doc.meshes) {
+        Cleanup.remapStates(m, mapFn);
+        // a part carries its own state: replace (never mutate — history
+        // snapshots share mesh objects) so its swatch and name follow the remap
+        if (m.part) m.part = { ...m.part, state: mapFn(m.part.state) };
+      }
       doc.filaments.splice(k - 1, 1);
       doc.filaments.forEach((f, i) => (f.index = i + 1));
       pushHistory("Delete color");
@@ -249,7 +260,7 @@
     doc.meshes.forEach((m, i) => {
       const li = document.createElement("li");
       li.className = "objrow";
-      const nm = document.createElement("span"); nm.className = "fname"; nm.textContent = (m.part ? m.part.label : "Object " + (i + 1));
+      const nm = document.createElement("span"); nm.className = "fname"; nm.textContent = partLabel(m, i);
       const ct = document.createElement("span"); ct.className = "fcount"; ct.textContent = m.nf.toLocaleString();
       nm.addEventListener("click", () => isolate({ kind: "mesh", index: i }));
       ct.addEventListener("click", () => isolate({ kind: "mesh", index: i }));
@@ -721,7 +732,7 @@
       const r = Split.plugSolids(m, subs, { depth });
       if (r.error) { toast(r.error, true); return; }
       partSeq++;
-      r.part.part = { label: "Part " + partSeq + " · " + colorName(hit.state), state: hit.state };
+      r.part.part = { seq: partSeq, state: hit.state };
       if (m.part) r.remainder.part = m.part; // splitting a part: what's left is still that part
       doc.meshes.splice(mi, 1, r.remainder, r.part);
       doc.synthetic = true;
@@ -735,7 +746,7 @@
       buildObjects();
       updateStats();
       ensureSubGraphs("Preparing tool…");
-      toast("Split out " + r.part.part.label);
+      toast("Split out " + partLabel(r.part) + (r.info.wraps ? " — wraps around the model; it can't be slid into place without cutting" : ""));
     });
   }
   Viewer.onPick((hit) => {
@@ -930,7 +941,7 @@
       if (previewActive) { restore(current()); previewActive = false; render(null); }
       restore(current());
       toast("Packing .3mf …");
-      triggerDownload(await ThreeMF.exportZip(doc), outName);
+      triggerDownload(await ThreeMF.exportZip(doc, { nameOf: partLabel }), outName);
     } catch (e) { console.error(e); toast("Export failed: " + e.message, true); }
   }
 

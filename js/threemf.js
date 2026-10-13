@@ -127,8 +127,10 @@
   // Rebuild both the vertices and triangles blocks from the mesh's current
   // positions/paints (so rotation and color edits are both written) and
   // generate a new .3mf Blob.
-  async function exportZip(doc) {
-    if (doc.synthetic) return exportGenerated(doc);
+  // opts.nameOf(mesh, i): object name for a generated package (app.js derives
+  // part names from the part's current state).
+  async function exportZip(doc, opts) {
+    if (doc.synthetic) return exportGenerated(doc, opts);
     const byPath = new Map();
     for (const mesh of doc.meshes) { let a = byPath.get(mesh.path); if (!a) byPath.set(mesh.path, a = []); a.push(mesh); }
     for (const [path, fileMeshes] of byPath) {
@@ -192,11 +194,12 @@
 
   // Export a document whose geometry no longer matches the source files (plane
   // cuts): every mesh becomes a generated object carrying its full paint.
-  async function exportGenerated(doc) {
+  async function exportGenerated(doc, opts) {
+    const nameOf = (opts && opts.nameOf) || ((m, i) => (m.part ? "Part " + m.part.seq : "Object " + (i + 1)));
     const objects = doc.meshes.map((m, i) => {
       const I = new Uint32Array(m.nf * 3);
       for (let f = 0; f < m.nf; f++) { I[f * 3] = m.v1[f]; I[f * 3 + 1] = m.v2[f]; I[f * 3 + 2] = m.v3[f]; }
-      return { name: m.part ? m.part.label : "Object " + (i + 1), extruder: doc.defaultExtruder, positions: m.positions, indices: I, triState: null, paints: m.paints };
+      return { name: nameOf(m, i), extruder: doc.defaultExtruder, positions: m.positions, indices: I, triState: null, paints: m.paints };
     });
     return assembleGeneratedPackage(doc, objects);
   }

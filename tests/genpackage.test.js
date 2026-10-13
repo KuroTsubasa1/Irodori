@@ -97,3 +97,17 @@ test("assembleGeneratedPackage declares the Objects relationship regardless of s
   const rootModel = await out.file("3D/3dmodel.model").async("string");
   assert.match(rootModel, /p:path="\/3D\/Objects\/object_1\.model"/);
 });
+
+// Part names are derived from the part's CURRENT state by the caller (app.js
+// partLabel), so a deleted/shifted colour can never leave a stale name.
+test("exportGenerated names objects through opts.nameOf", async () => {
+  const { ThreeMF, JSZip } = loadWithZip();
+  const tri = () => ({ nf: 1, positions: new Float32Array([0, 0, 0, 1, 0, 0, 0, 1, 0]), v1: Int32Array.from([0]), v2: Int32Array.from([1]), v3: Int32Array.from([2]), paints: [""] });
+  const part = Object.assign(tri(), { part: { seq: 3, state: 2 } });
+  const doc = { zip: buildInlineSourceZip(JSZip), filaments: [{ hex: "#FFFFFF" }, { hex: "#000000" }], origFilamentCount: 1, defaultExtruder: 1, meshes: [tri(), part] };
+  const blob = await ThreeMF.exportGenerated(doc, { nameOf: (m, i) => (m.part ? "Part " + m.part.seq + " · Filament " + m.part.state : "Object " + (i + 1)) });
+  const out = await JSZip.loadAsync(blob.__buf.toString("base64"), { base64: true });
+  const cfg = await out.file("Metadata/model_settings.config").async("string");
+  assert.match(cfg, /key="name" value="Object 1"/);
+  assert.match(cfg, /key="name" value="Part 3 · Filament 2"/);
+});
