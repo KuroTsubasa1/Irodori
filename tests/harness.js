@@ -378,4 +378,22 @@ function makeHeightBox(n, size, zfn) {
   };
 }
 
-module.exports = { makeHeightBox, makePocketBox, makeUChannel, makeGridBox, makeRoofPrism, loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeClosedCube, makeBentStrip, makeBigTriangle, directedViolations, signedVolume };
+// The tracked reference model (samples/), unzipped with the vendored JSZip and
+// parsed by the pure ThreeMF.parseMeshes. Resolves to { M, mesh } where M is a
+// fresh loadModules() and mesh the single object (199,672 faces).
+async function loadSampleMesh() {
+  const zipBox = { setTimeout, clearTimeout, console };
+  zipBox.window = zipBox; zipBox.self = zipBox;
+  vm.createContext(zipBox);
+  vm.runInContext(fs.readFileSync(path.join(__dirname, "..", "vendor/jszip.min.js"), "utf8"), zipBox, { filename: "jszip.min.js" });
+  const buf = fs.readFileSync(path.join(__dirname, "..", "samples", "Meshy_AI_Pikachu and the Red Ball.3mf"));
+  const bytes = vm.runInContext("new Uint8Array(" + buf.length + ")", zipBox); // JSZip type checks are realm-bound
+  bytes.set(buf);
+  const zip = await zipBox.JSZip.loadAsync(bytes);
+  const text = await zip.file("3D/Objects/object_1.model").async("string");
+  const M = loadModules();
+  const meshes = M.ThreeMF.parseMeshes(text, "3D/Objects/object_1.model");
+  return { M, mesh: meshes[0] };
+}
+
+module.exports = { loadSampleMesh, makeHeightBox, makePocketBox, makeUChannel, makeGridBox, makeRoofPrism, loadModules, makeTetra, edgeUseCounts, makeTJunction, capBoundaryEdges, makeMirrorPair, makeOpenTube, makeClosedCube, makeBentStrip, makeBigTriangle, directedViolations, signedVolume };
