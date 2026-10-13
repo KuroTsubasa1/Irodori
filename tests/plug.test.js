@@ -266,3 +266,19 @@ test("plugSolids: a welded crease line inside the region does not pinch the part
   assert.ok(vol(r.part) > 1, "plug volume " + vol(r.part));
   assert.ok(Math.abs(vol(r.part) + vol(r.remainder) - before) < 1e-5);
 });
+
+// Fix round 1: contact must be a property of the CROSSING, not of triangle
+// size. A tiny new triangle whose vertices are all 1 deep (plug material)
+// poking through the cube's top face is a penetration even though the
+// triangle is far smaller than the contact tolerance; one lying in the
+// surface layer (depth 0) touching the face is contact.
+test("plug gate: tiny deep triangle through a face is a crossing; a surface-layer one is contact", () => {
+  const { Split, MeshGeo } = loadModules();
+  const { makeClosedCube } = require("./harness");
+  const cube = makeClosedCube(); // [0,2]^3
+  const grid = MeshGeo.faceGrid(cube), tol = 1e-3 * MeshGeo.meshBounds(cube).diag; // ~0.0035
+  const P = [[1, 1, 1.999], [1.002, 1, 2.001], [1, 1.002, 2.001]]; // 0.002 mm, straddles z = 2
+  const pos = (id) => P[id], canon = (id) => id;
+  assert.strictEqual(Split._plugIntersects(cube, grid, [0, 1, 2], pos, () => 1, canon, tol), true, "deep: penetration");
+  assert.strictEqual(Split._plugIntersects(cube, grid, [0, 1, 2], pos, () => 0, canon, tol), false, "surface layer: contact");
+});

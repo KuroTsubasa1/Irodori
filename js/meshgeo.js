@@ -129,6 +129,40 @@
     return t > 1e-9 && t < 1 - 1e-9;
   }
 
+  // Points of the crossing between triangles V = A[a..a+8] and U = B[b..b+8]:
+  // every edge of one meeting the other (closed, non-parallel), written as xyz
+  // triples into out (room for 6 points). Returns the point count — for a
+  // proper crossing these span the actual intersection segment.
+  function crossPoints(A, a, B, b, out) {
+    let n = 0;
+    const edgesVs = (P, p, Q, q) => {
+      const e1x = Q[q + 3] - Q[q], e1y = Q[q + 4] - Q[q + 1], e1z = Q[q + 5] - Q[q + 2];
+      const e2x = Q[q + 6] - Q[q], e2y = Q[q + 7] - Q[q + 1], e2z = Q[q + 8] - Q[q + 2];
+      const nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+      const nn = nx * nx + ny * ny + nz * nz;
+      if (!(nn > 0)) return;
+      const d0 = -(nx * Q[q] + ny * Q[q + 1] + nz * Q[q + 2]);
+      for (let k = 0; k < 3; k++) {
+        const o0 = p + k * 3, o1 = p + ((k + 1) % 3) * 3;
+        const s0 = nx * P[o0] + ny * P[o0 + 1] + nz * P[o0 + 2] + d0, s1 = nx * P[o1] + ny * P[o1 + 1] + nz * P[o1 + 2] + d0;
+        if ((s0 > 0 && s1 > 0) || (s0 < 0 && s1 < 0) || s0 === s1) continue;
+        const t = s0 / (s0 - s1);
+        const x = P[o0] + (P[o1] - P[o0]) * t, y = P[o0 + 1] + (P[o1 + 1] - P[o0 + 1]) * t, z = P[o0 + 2] + (P[o1 + 2] - P[o0 + 2]) * t;
+        // inside Q (barycentric, small tolerance)
+        const wx = x - Q[q], wy = y - Q[q + 1], wz = z - Q[q + 2];
+        const cx = e1y * wz - e1z * wy, cy = e1z * wx - e1x * wz, cz = e1x * wy - e1y * wx; // e1 x w
+        const v = (cx * nx + cy * ny + cz * nz) / nn;
+        const dx = wy * e2z - wz * e2y, dy = wz * e2x - wx * e2z, dz = wx * e2y - wy * e2x; // w x e2
+        const u = (dx * nx + dy * ny + dz * nz) / nn;
+        if (u < -1e-9 || v < -1e-9 || u + v > 1 + 1e-9 || n >= 6) continue;
+        out[n * 3] = x; out[n * 3 + 1] = y; out[n * 3 + 2] = z; n++;
+      }
+    };
+    edgesVs(A, a, B, b);
+    edgesVs(B, b, A, a);
+    return n;
+  }
+
   // Edge-adjacent triangles (s0,s1,a) and (s0,s1,b) overlap beyond their
   // shared edge only when folded flat onto each other: coplanar, with a and b
   // on the same side of the edge.
@@ -245,5 +279,5 @@
     return v6 / 6;
   }
 
-  global.MeshGeo = { meshBounds, checkClosed, signedVolume, triTriIntersect, triTriFlat, segTriCross, foldedPair, faceGrid, rayHit };
+  global.MeshGeo = { meshBounds, checkClosed, signedVolume, triTriIntersect, triTriFlat, crossPoints, segTriCross, foldedPair, faceGrid, rayHit };
 })(window);

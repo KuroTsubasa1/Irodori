@@ -184,7 +184,8 @@
         if (nk < s[u]) { s[u] = nk; push(u, nk); }
       }
     }
-    return { ids, loc, D, s, pTris, n, NI, X, Y, Z };
+    for (let i = 0; i < n; i++) { const L = Math.hypot(VN[i * 3], VN[i * 3 + 1], VN[i * 3 + 2]) || 1; VN[i * 3] /= L; VN[i * 3 + 1] /= L; VN[i * 3 + 2] /= L; }
+    return { ids, loc, D, s, pTris, n, NI, X, Y, Z, VN };
   }
 
   // ---- plug geometry for one depth scale ---------------------------------
@@ -198,7 +199,7 @@
   // to the remainder unchanged instead of being doubled by its skin.
   function buildPlug(field, conf, scale, snap) {
     const { tri } = conf;
-    const { ids, loc, D, s, pTris, NI, X, Y, Z } = field;
+    const { ids, loc, D, s, pTris, NI, X, Y, Z, VN } = field;
     const nP = pTris.length;
     // union-find over patch corners (3·j + k)
     const parent = new Int32Array(nP * 3);
@@ -239,13 +240,16 @@
     for (let j = 0; j < nP; j++) {
       const t = pTris[j];
       for (let k = 0; k < 3; k++) {
-        const id = tri[t * 3 + k], i = loc[id], d = Math.max(s[i] * scale, snap);
+        const id = tri[t * 3 + k], i = loc[id], forced = !(s[i] * scale > snap), d = forced ? snap : s[i] * scale;
         if (welded[i]) { skin[j * 3 + k] = id; continue; }
         const root = find(j * 3 + k);
         let sid = rootId.get(root);
         if (sid === undefined) {
           sid = NI + src.length; rootId.set(root, sid); src.push(id);
-          extra.push(X(id) + D[i * 3] * d, Y(id) + D[i * 3 + 1] * d, Z(id) + D[i * 3 + 2] * d, d);
+          // an un-welded (forced) vertex sits where D may not enter every face
+          // (that is why its depth was ~0): step along its own inward normal
+          const dx = forced ? -VN[i * 3] : D[i * 3], dy = forced ? -VN[i * 3 + 1] : D[i * 3 + 1], dz = forced ? -VN[i * 3 + 2] : D[i * 3 + 2];
+          extra.push(X(id) + dx * d, Y(id) + dy * d, Z(id) + dz * d, d);
         }
         skin[j * 3 + k] = sid;
       }
@@ -273,25 +277,30 @@
   // ---- self-intersection gate ----------------------------------------------
   //
   // Do the new triangles (wall + skin) cross each other or the original mesh?
-  // Exact adjacency, no shrink hacks: pairs sharing a vertex (copies of one
-  // source vertex count as shared) are tested only for a fold (edge-adjacent)
-  // or for the far edge piercing the other triangle (vertex-adjacent).
-  // Contact tolerance tol (a print-irrelevant distance): a triangle lying
-  // within tol of the surface is surface, not plug — exempt from the mesh test
-  // and from tests against other such triangles — and a crossing whose
-  // penetration is <= tol is contact (a wall's rim edge legitimately lies ON
-  // the surface; a skin hugging a sharp crease grazes it).
+  // Not an exact predicate — a toleranced one:
+  //  - pair classification by shared SOURCE vertex (copies of one vertex count
+  //    as shared): edge-adjacent -> only a flat fold (or a duplicate) counts;
+  //    vertex-adjacent -> the far edge of one piercing the other; otherwise
+  //    Möller with a scale-relative on-plane epsilon;
+  //  - contact rule, decided on the CROSSING itself: the plug depth of a new
+  //    triangle at a point is its vertices' depths (0 on the surface)
+  //    interpolated barycentrically; a crossing whose points all lie in the
+  //    surface layer (depth <= tol) on every new triangle involved — or a
+  //    touch with no crossing segment at all (shared vertex) — is contact.
+  //    Fast path: a triangle whose vertices are all within tol is in that
+  //    layer everywhere, so it skips the mesh test and tests against other
+  //    such triangles.
   function plugIntersects(mesh, grid, newTris, pos, depthOf, canon, tol) {
     const m = newTris.length / 3;
     if (!m) return false;
     const C = new Float64Array(m * 9), bb = new Float64Array(m * 6);
-    const near = new Uint8Array(m), CN = new Float64Array(m * 3);
+    const near = new Uint8Array(m), CN = new Float64Array(m * 3), DP = new Float64Array(m * 3);
     for (let i = 0; i < m; i++) {
       let deep = 0;
       for (let k = 0; k < 3; k++) {
         const id = newTris[i * 3 + k], p = pos(id), d = depthOf(id), o = i * 9 + k * 3;
         C[o] = p[0]; C[o + 1] = p[1]; C[o + 2] = p[2];
-        CN[i * 3 + k] = canon(id);
+        CN[i * 3 + k] = canon(id); DP[i * 3 + k] = d;
         if (d > deep) deep = d;
       }
       near[i] = deep <= tol ? 1 : 0;
@@ -321,13 +330,13 @@
       const s0 = a0 === b0 || a0 === b1 || a0 === b2, s1 = a1 === b0 || a1 === b1 || a1 === b2, s2 = a2 === b0 || a2 === b1 || a2 === b2;
       const ns = (s0 ? 1 : 0) + (s1 ? 1 : 0) + (s2 ? 1 : 0);
       if (!ns) return MeshGeo.triTriFlat(C, i * 9, C, j * 9);
-      if (ns === 3) return true; // duplicate triangle
+      if (ns === 3) return 2; // duplicate triangle: overlaps like a fold
       const kb = (x) => (x === b0 ? 0 : x === b1 ? 1 : 2); // corner of j holding canonical x
       if (ns === 2) { // edge-adjacent: only a flat fold overlaps
         const ka = !s0 ? 0 : !s1 ? 1 : 2, A = [a0, a1, a2];
         const sA = [0, 1, 2].filter((k) => k !== ka);
         const ob = [0, 1, 2].find((k) => [b0, b1, b2][k] !== A[sA[0]] && [b0, b1, b2][k] !== A[sA[1]]);
-        return MeshGeo.foldedPair(pt(C, i * 9 + sA[0] * 3), pt(C, i * 9 + sA[1] * 3), pt(C, i * 9 + ka * 3), pt(C, j * 9 + ob * 3));
+        return MeshGeo.foldedPair(pt(C, i * 9 + sA[0] * 3), pt(C, i * 9 + sA[1] * 3), pt(C, i * 9 + ka * 3), pt(C, j * 9 + ob * 3)) ? 2 : false;
       }
       // vertex-adjacent: the far edge of one piercing the other
       const sa = s0 ? 0 : s1 ? 1 : 2, sb = kb([a0, a1, a2][sa]);
@@ -337,7 +346,7 @@
     };
     // per-triangle planes (unit normal, offset, on-plane tolerance) for a cheap
     // separating-plane reject before the full test
-    const PL = new Float64Array(m * 5), PF = new Float64Array(5);
+    const PL = new Float64Array(m * 5);
     const plane = (A, i, out) => {
       const o = i * 9;
       const ux = A[o + 3] - A[o], uy = A[o + 4] - A[o + 1], uz = A[o + 5] - A[o + 2], wx = A[o + 6] - A[o], wy = A[o + 7] - A[o + 1], wz = A[o + 8] - A[o + 2];
@@ -357,20 +366,31 @@
       const s0 = nx * A[o] + ny * A[o + 1] + nz * A[o + 2] + d, s1 = nx * A[o + 3] + ny * A[o + 4] + nz * A[o + 5] + d, s2 = nx * A[o + 6] + ny * A[o + 7] + nz * A[o + 8] + d;
       return (s0 > e && s1 > e && s2 > e) || (s0 < -e && s1 < -e && s2 < -e);
     };
-    // penetration of a crossing pair: the smallest push along either plane
-    // normal that separates the two triangles (min over the two triangles of
-    // the shallower side of the other's vertices). <= tol: contact, not a crossing.
-    const side = (Pl, i, A, o) => {
-      const nx = Pl[i * 5], ny = Pl[i * 5 + 1], nz = Pl[i * 5 + 2], d = Pl[i * 5 + 3];
-      let pos = 0, neg = 0;
-      for (let k = 0; k < 3; k++) {
-        const s = nx * A[o + k * 3] + ny * A[o + k * 3 + 1] + nz * A[o + k * 3 + 2] + d;
-        if (s > pos) pos = s; else if (-s > neg) neg = -s;
-      }
-      return Math.min(pos, neg);
+    // Contact is a property of the CROSSING: the plug depth of new triangle i
+    // at point p is its vertices' depths interpolated barycentrically. A
+    // crossing all of whose points lie in the surface layer (depth <= tol) on
+    // every new triangle involved is contact; anything deeper is a crossing.
+    const depthAt = (i, x, y, z) => {
+      const o = i * 9;
+      const e1x = C[o + 3] - C[o], e1y = C[o + 4] - C[o + 1], e1z = C[o + 5] - C[o + 2], e2x = C[o + 6] - C[o], e2y = C[o + 7] - C[o + 1], e2z = C[o + 8] - C[o + 2];
+      const wx = x - C[o], wy = y - C[o + 1], wz = z - C[o + 2];
+      const d11 = e1x * e1x + e1y * e1y + e1z * e1z, d12 = e1x * e2x + e1y * e2y + e1z * e2z, d22 = e2x * e2x + e2y * e2y + e2z * e2z;
+      const w1 = wx * e1x + wy * e1y + wz * e1z, w2 = wx * e2x + wy * e2y + wz * e2z, den = d11 * d22 - d12 * d12;
+      if (!(den > 0)) return Math.max(DP[i * 3], DP[i * 3 + 1], DP[i * 3 + 2]);
+      let u = (d22 * w1 - d12 * w2) / den, v = (d11 * w2 - d12 * w1) / den;
+      u = Math.max(0, Math.min(1, u)); v = Math.max(0, Math.min(1 - u, v));
+      return DP[i * 3] * (1 - u - v) + DP[i * 3 + 1] * u + DP[i * 3 + 2] * v;
     };
-    const shallow = (PlA, ia, A, oa, PlB, ib, B, ob) =>
-      (PlB[ib * 5 + 4] >= 0 && side(PlB, ib, A, oa) <= tol) || (PlA[ia * 5 + 4] >= 0 && side(PlA, ia, B, ob) <= tol);
+    const X = new Float64Array(18);
+    const contact = (i, j, B, ob) => { // j < 0: original face B[ob..]
+      const k = MeshGeo.crossPoints(C, i * 9, B, ob, X);
+      if (!k) return true; // touching at a point (shared vertex): no crossing segment
+      for (let q = 0; q < k; q++) {
+        if (depthAt(i, X[q * 3], X[q * 3 + 1], X[q * 3 + 2]) > tol) return false;
+        if (j >= 0 && depthAt(j, X[q * 3], X[q * 3 + 1], X[q * 3 + 2]) > tol) return false;
+      }
+      return true;
+    };
     const markNew = new Int32Array(m).fill(-1), markFace = new Int32Array(mesh.nf).fill(-1);
     const v1 = mesh.v1, v2 = mesh.v2, v3 = mesh.v3;
     for (let i = 0; i < m; i++) {
@@ -386,7 +406,8 @@
           const j6 = j * 6;
           if (bb[i6] > bb[j6 + 3] || bb[j6] > bb[i6 + 3] || bb[i6 + 1] > bb[j6 + 4] || bb[j6 + 1] > bb[i6 + 4] || bb[i6 + 2] > bb[j6 + 5] || bb[j6 + 2] > bb[i6 + 5]) continue;
           if (oneSide(PL, i, C, j * 9) || oneSide(PL, j, C, i * 9)) continue;
-          if (pairHit(i, j) && !shallow(PL, i, C, i * 9, PL, j, C, j * 9)) return true;
+          const hit = pairHit(i, j);
+          if (hit === 2 ? !(near[i] && near[j]) : hit && !contact(i, j, C, j * 9)) return true; // 2: flat fold / duplicate
         }
         if (ni) continue;
         for (let e = start[c], end = start[c + 1]; e < end; e++) {
@@ -399,10 +420,7 @@
               Math.min(P[a + 2], P[b + 2], P[cc + 2]) > bb[i6 + 5] || Math.max(P[a + 2], P[b + 2], P[cc + 2]) < bb[i6 + 2]) continue;
           for (let k = 0; k < 3; k++) { F[k] = P[a + k]; F[3 + k] = P[b + k]; F[6 + k] = P[cc + k]; }
           if (oneSide(PL, i, F, 0)) continue;
-          if (MeshGeo.triTriFlat(C, i * 9, F, 0)) {
-            plane(F, 0, PF);
-            if (!shallow(PL, i, C, i * 9, PF, 0, F, 0)) return true;
-          }
+          if (MeshGeo.triTriFlat(C, i * 9, F, 0) && !contact(i, -1, F, 0)) return true;
         }
       }
     }
@@ -467,7 +485,12 @@
     const part = emit(PF, PS), remainder = emit(RF, RS);
     const bad = (mm) => MeshGeo.checkClosed(mm) || !(MeshGeo.signedVolume(mm) > 0);
     if (bad(part) || bad(remainder)) return { error: "Couldn't make a clean solid here (region too thin or sharp for a plug)", info };
-    return { part, remainder, info };
+    const out = { part, remainder, info };
+    if (opts && opts.debug) { // test hook: the new triangles (part winding) and where each plug vertex came from
+      const src = plug.src;
+      out.debug = { tris: plug.walls.concat(plug.skins), pos: plug.pos, NI, source: (id) => (id < NI ? id : src[id - NI]), conf, subFace: g.subFace };
+    }
+    return out;
   }
 
   // Test hook: the displacement field of a region, per welded sub-graph vertex.
@@ -613,5 +636,5 @@
     return { objectsModel, rootModel, modelSettings };
   }
 
-global.Split = { plugSolids, plugField: plugFieldOf, buildSplitXML, uuid, layoutParts };
+global.Split = { plugSolids, plugField: plugFieldOf, _plugIntersects: plugIntersects, buildSplitXML, uuid, layoutParts };
 })(window);
