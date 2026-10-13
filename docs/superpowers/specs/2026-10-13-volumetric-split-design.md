@@ -134,19 +134,28 @@ remainder). Wall and skin: the part's state in the part;
 ## Robustness — refuse rather than ship garbage
 
 - **Self-intersection gate** of wall + skin triangles against each other and
-  against the original faces (grid-bucketed). Pairs sharing a vertex (copies
-  of one source vertex count as shared) are tested exactly: edge-adjacent →
-  only a flat fold overlaps (`MeshGeo.foldedPair`); vertex-adjacent → the far
-  edge of one piercing the other (`MeshGeo.segTriCross`); otherwise Möller
-  (`triTriIntersect`, with a scale-relative on-plane epsilon — the absolute
-  one reported near-parallel separated 0.005 mm triangles as crossing).
-  **Contact tolerance** `tol = 10⁻³·diag` (≈ 0.06 mm on the 63 mm sample,
-  below print resolution): a triangle whose vertices all lie within `tol` of
-  the surface is surface (not tested against the mesh or other such
-  triangles), and a crossing whose *penetration* (smallest push along either
-  plane normal that separates the pair) is ≤ `tol` is contact. On any
-  intersection: halve the scale and rebuild, up to 4 times; then refuse.
-  There is no shell fallback any more.
+  against the original faces (grid-bucketed). This is a *toleranced* test,
+  not an exact one:
+  - Pairs sharing a source vertex (copies of one vertex count as shared):
+    edge-adjacent → only a flat fold or a duplicate counts
+    (`MeshGeo.foldedPair`); vertex-adjacent → the far edge of one piercing the
+    other (`MeshGeo.segTriCross`). Other pairs: Möller (`triTriIntersect`,
+    scale-relative on-plane epsilon).
+  - **Contact rule** (`tol = 10⁻³·diag`, ≈ 0.06 mm on the sample): decided on
+    the crossing, not on triangle size. The plug depth of a new triangle at a
+    point is its vertices' depths (0 on the surface) interpolated
+    barycentrically. A crossing whose points (`MeshGeo.crossPoints`: the
+    actual crossing segment) all lie at depth ≤ `tol` on every new triangle
+    involved is contact, and so is a touch with no crossing segment (two
+    triangles meeting only at a shared vertex). Fast path: a triangle whose
+    vertices are all within `tol` is in that layer everywhere — no mesh test,
+    no test against other such triangles.
+  - On any crossing: halve the scale and rebuild, up to 4 times; then
+    refuse. No shell fallback.
+  - The sample-model test checks the result *independently* of these rules:
+    every plug vertex inside the original solid (ray parity) and zero
+    tol-free crossings with original faces not incident to a triangle's own
+    surface vertices.
 - **Watertight gate** on both outputs (unchanged): `MeshGeo.checkClosed === 0`
   and `MeshGeo.signedVolume > 0`; otherwise nothing is applied and the error
   carries `info`. Toast *"Couldn't make a clean solid here (region too thin
@@ -154,7 +163,12 @@ remainder). Wall and skin: the part's state in the part;
 - **Refusals** (`{ error }`): `subs` covers the whole mesh → *"That's the
   whole object"*; empty region → *"Nothing to split there"*; depth ≤ 0 →
   *"Set a split depth greater than 0"*. **Pinch is no longer refused**
-  (per-wedge copies, above).
+  (per-wedge copies, above). **Removed:** *"Couldn't find the region's
+  outline"* (no boundary loops are extracted any more).
+- **Weld threshold changed:** v1 welded an offset point to its rim vertex
+  below `10⁻⁶·diag`; now a vertex stays on the surface below
+  `snap = 10⁻⁴·diag` (≈ 0.006 mm). Un-welded vertices (pinch-line fix) step
+  `snap` along their own inward vertex normal, not along `D`.
 
 ## Tool flow (js/app.js, index.html)
 
@@ -222,8 +236,11 @@ Snapshots already store `meshList` + `synthetic` (plane cut needs it).
 - **Welded crease line:** sharp V-notch inside the region → no 4× edges.
 - **Refusals:** whole mesh, empty, depth 0.
 - **Chained** split → split on remainder → plane cut; **refined paint**.
-- **Sample model** (`tests/sample.test.js`, ~20 s): belly (seed 490285,
-  depth 3), an ear tip and the neck band → closed, positive, volume-exact.
+- **Sample model** (`tests/sample.test.js`, ~28 s): belly (seed 490285,
+  depth 3), an ear tip and the neck band → closed, positive, volume sum
+  within 1e-6·v0, plus the independent validity checks above. Gate unit
+  test: a tiny deep triangle through a face is a crossing, a surface-layer
+  one is contact.
 - Browser (Playwright, sample model): belly plug; ear-tip split; neck band
   split; paint over a part then split it again; undo chain; export opens
   with N objects.
