@@ -535,7 +535,9 @@
     for (const s of subs) inSub[s] = 1;
     const field = plugField(mesh, g, conf, inSub, depth);
     const diag = MeshGeo.meshBounds(mesh).diag;
-    const snap = 1e-4 * diag, tol = 1e-3 * diag; // weld below snap; contact tolerance (≈0.06 mm on a 63 mm model)
+    // weld below snap; contact tolerance ≈0.06 mm on the 63 mm sample, capped at
+    // 0.05 mm (below a nozzle width) — print tolerances are absolute
+    const snap = 1e-4 * diag, tol = Math.min(1e-3 * diag, 0.05);
     const grid = MeshGeo.faceGrid(mesh);
     const { NV, vx, vy, vz } = g, NI = field.NI, cpos = conf.cpos;
     let scale = 1, halvings = 0, plug, clean = false;
