@@ -1,7 +1,7 @@
 # Volumetric Split — design
 
 **Date:** 2026-10-13
-**Status:** Approved in conversation; awaiting written-spec review.
+**Status:** Implemented on feat/volumetric-split; semantics (cup/liner/ring) pending user sign-off.
 
 ## Problem
 
@@ -44,16 +44,17 @@ so every other tool (paint, Cut, Split again) works on them unchanged.
   offset + Liepa cap of the offset loop + a `t = 0` "shell" fallback + pinch
   refusal) refused *every* region of the sample model. The bottom is now the
   **displaced patch** ("skin") on a spatially smooth displacement field; see
-  *Why not a cap* below. The `Cap method` dropdown no longer affects Split
-  (`opts.method` is accepted and ignored).
+  *Why not a cap* below.
 
 ## Geometry — `Split.plugSolids(mesh, subs, opts)` (js/split.js)
 
 `opts = { depth }`. Returns `{ part, remainder, info }` — two document
 meshes `{ positions, nf, v1, v2, v3, paints }` (the app sets
-`part.part = { label, state }`)
+`part.part = { seq, state }`)
 — or `{ error }` with a user-facing reason. `info = { halvings, shell:
-false, faces }` (`shell` is kept for the app's toast and is always false).
+false, faces, euler, specks, wraps, affectedFaces }` (`shell` is kept for
+the app's toast and is always false; `euler`/`specks`/`wraps`, see *Parts
+that wrap around*; `affectedFaces` only on success).
 
 ### Shared conformed surface
 
@@ -62,6 +63,28 @@ Both meshes come from one conformed surface of every sub-triangle
 triangles; a sub whose edges carry T-junction midpoints is fanned from its
 centroid, which gets its own id). Patch and remainder index the same ids, so
 the rim is welded by construction. No boundary loops are extracted.
+
+**Affected faces only.** The conformed triangles are emitted only for the
+*affected* faces: the region's faces plus, transitively, every face sharing
+an edge that carries a T-junction midpoint (`g.midOf(u, v) >= 0`) with an
+affected face, until closure. The closure's boundary edges carry no midpoint
+on either side, so no T-junction is left. Every other face of the remainder
+is its **original triangle** with its **original `paint_color` string**
+(paint trees outside the region are preserved, not flattened). Its corners
+keep their original vertex ids, except vertices shared with an affected
+face, which take the welded sub-graph id (`g.vid`) so both sides weld.
+Welding every vertex by coordinate would merge coincident vertices that an
+earlier split deliberately kept apart (the per-wedge pinch copies), and
+chained splits on that remainder would fail. Measured on the sample at
+depth 3:
+
+| region | affected faces | remainder triangles (before → after) | export, deflated (before → after) |
+|---|---|---|---|
+| ear tip | 2,685 | 899,824 → 226,150 | 10.45 → 2.95 MB |
+| belly | 17,213 | 929,344 → 358,654 | 12.65 → 6.26 MB |
+
+The remainder must still carry the pocket (the plug's own skin and wall
+triangles: 108,835 for the belly), so it grows by about that much.
 
 ### Displacement field (`plugField`, exported for tests as `Split.plugField`)
 
@@ -141,7 +164,9 @@ remainder). Wall and skin: the part's state in the part;
     (`MeshGeo.foldedPair`); vertex-adjacent → the far edge of one piercing the
     other (`MeshGeo.segTriCross`). Other pairs: Möller (`triTriIntersect`,
     scale-relative on-plane epsilon).
-  - **Contact rule** (`tol = 10⁻³·diag`, ≈ 0.06 mm on the sample): decided on
+  - **Contact rule** (`tol = min(10⁻³·diag, 0.05 mm)`; 0.05 mm on the
+    63 mm sample. Print tolerances are absolute, and 0.05 mm is below a
+    nozzle width): decided on
     the crossing, not on triangle size. The plug depth of a new triangle at a
     point is its vertices' depths (0 on the surface) interpolated
     barycentrically. A crossing whose points (`MeshGeo.crossPoints`: the
@@ -153,7 +178,8 @@ remainder). Wall and skin: the part's state in the part;
   - On any crossing: halve the scale and rebuild, up to 4 times; then
     refuse. No shell fallback.
   - The sample-model test checks the result *independently* of these rules:
-    every plug vertex inside the original solid (ray parity) and zero
+    every plug vertex inside the original solid (the nearest hit along a ray
+    is a back face, majority of three directions) and zero
     tol-free crossings with original faces not incident to a triangle's own
     surface vertices.
 - **Watertight gate** on both outputs (unchanged): `MeshGeo.checkClosed === 0`
@@ -170,27 +196,50 @@ remainder). Wall and skin: the part's state in the part;
   `snap = 10⁻⁴·diag` (≈ 0.006 mm). Un-welded vertices (pinch-line fix) step
   `snap` along their own inward vertex normal, not along `D`.
 
+### Parts that wrap around
+
+A rigid part whose patch is not a disc can't be slid into its pocket. Two
+cases: a band around the model (the neck stripe becomes a ring), and a
+region with a real hole. `plugSolids` computes the Euler characteristic
+χ = V − E + F of the region's conformed triangles, counting pinch vertices
+once per wedge (`info.euler`). Real rims enclose tiny unpainted specks
+(0.001–0.024 mm² on the sample), which are holes topologically but never
+block assembly. Complement components under 1 % of the region's area are
+therefore filled before the test (`info.specks`). `info.wraps = χ ≠ 1`
+after filling. Sample: ear tip χ = −1 with 2 specks → no wrap; belly χ = 0
+with 1 speck → no wrap; neck band χ = −3 with 10 specks → wraps. The split
+is still applied, and the app only warns. Pocket liners can have undercuts
+for the same reason (inward directions diverge); that is not detected.
+
 ## Tool flow (js/app.js, index.html)
 
 - Hover: existing same-color region tint (no `claimed` exclusion any more).
-- Click: `Split.plugSolids(mesh, subs, { depth, method })` under `busy`;
+- Click: `Split.plugSolids(mesh, subs, { depth })` under `busy`;
   on success replace `doc.meshes[i]` with `[remainder, part]`, set
   `doc.synthetic = true`, `pushHistory("Split")`, rebuild, `buildObjects`,
   `ensureSubGraphs`. On `{ error }`: toast, no history entry.
-- Panel: `Depth` — `<input type=number id="splitDepth">` (mm, step 0.1)
-  linked to a range; default 3, min 0.3, max `modelSize / 2` (set on load).
-  Existing `Cap method` select stays (app.js still passes it) but, since
-  task 6, Split ignores it — the bottom is the skin, not a cap; the select
-  is now dead UI for Split (follow-up: hide or relabel it). Hint text: *"Click a colored region to lift
-  it out as a solid part."*
+- Panel: `Depth` — `<input type=number id="splitDepth" min="0" step="0.1">`
+  (mm; no range slider); default 3, `max = modelSize / 2` set on load (not
+  enforced on typed values; the half-thickness clamp applies). Depth ≤ 0
+  (or empty/NaN) is refused with *"Set a split depth greater than 0"*.
+  Hint text: *"Click a colored region to lift it out as a solid part."*
+- Success toast: *"Split out Part N · Filament K"*, plus *" — wraps around
+  the model; it can't be slid into place without cutting"* when
+  `info.wraps`.
 - Removed guards: *"Export or undo your split parts before cutting"* and the
   export dialog's dependence on `splitParts`.
 
 ## Viewer and layout (js/viewer.js)
 
-- `mesh.part = { label, state }`; `label = "Part N · <color name>"` assigned at
-  split time (N = count of part meshes + 1). Cut halves copy `part` from
-  their source so a cut part stays a part.
+- `mesh.part = { seq, state }`. `seq` is a monotonic per-document counter
+  (`partSeq`). It resets on load and is not rolled back on undo. The name
+  `"Part <seq> · <color name>"` is derived from the CURRENT `state` by
+  `partLabel` in app.js, both for the Objects list and for export (via
+  `ThreeMF.exportZip(doc, { nameOf })`). Deleting a colour therefore can't
+  leave a stale name: delete-color replaces each `m.part` with a remapped
+  copy. History snapshots carry `part` per mesh, because snapshots share
+  mesh objects and `part` must never be mutated in place. Cut halves copy
+  `part` from their source, so a cut part stays a part.
 - **Display-only row layout:** `Viewer.build` computes, for meshes with
   `part`, a per-mesh offset from the existing `Split.layoutParts(bodyBox,
   partBoxes, margin)` where `bodyBox` is the union AABB of non-part meshes,

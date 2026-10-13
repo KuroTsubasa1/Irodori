@@ -76,7 +76,9 @@ as **genuine sliceable filaments**, and every add/delete is undoable.
 Lift any connected colored region out as its own **watertight solid plug** with a
 depth in mm; the remainder gets the matching pocket. Export every part **plus the
 remainder** as separate objects in a single `.3mf` — the cut surfaces stay
-perfectly coincident.
+perfectly coincident. Paint outside the split region is kept exactly as it was.
+If a part wraps around the model (a stripe or ring), Irodori warns you that it
+can't be slid back into place.
 
 ![Split tool](docs/assets/screenshot-split.png)
 
@@ -127,7 +129,7 @@ python3 -m http.server 8000
 > caching will happily serve stale modules and produce phantom
 > "X is not a function" errors.
 
-Run the tests (Node's built-in runner, **93 tests**):
+Run the tests (Node's built-in runner, **98 tests**):
 
 ```bash
 npm test
@@ -149,6 +151,7 @@ graph TD
     subgraph_["subgraph.js<br/><i>sub-triangle adjacency</i>"]
     select["select.js<br/><i>selections · symmetry</i>"]
     cleanup["cleanup.js<br/><i>paint mutations</i>"]
+    meshgeo["meshgeo.js<br/><i>closed check · tri–tri · ray cast</i>"]
     split["split.js<br/><i>watertight solids</i>"]
     planecut["planecut.js<br/><i>geometric plane cut</i>"]
     viewer["viewer.js<br/><i>three.js scene · picking</i>"]
@@ -158,6 +161,8 @@ graph TD
     paint --> subgraph_
     subgraph_ --> select --> cleanup
     paint --> split
+    meshgeo --> split
+    meshgeo --> viewer
     paint --> planecut
     threemf --> viewer
     cleanup --> app
@@ -172,7 +177,8 @@ graph TD
 | `paint.js` | Bambu `paint_color` codec; `Paint.tessellate` is **the** geometry convention every subdivision must match. |
 | `threemf.js` | `.3mf` zip load/export, multi-mesh round-trip, filament normalization. |
 | `subgraph.js` / `select.js` / `cleanup.js` | The `Cleanup` namespace: cached sub-triangle adjacency, read-only selections + symmetry, and paint-mutating ops. |
-| `split.js` | Solid plugs from sub-triangle sets (displaced-patch bottom, wall per rim edge); the remainder gets the matching pocket. |
+| `meshgeo.js` | Pure geometry: bounds, directed closed-surface check, signed volume, Möller tri–tri test, face grid + ray cast. |
+| `split.js` | Solid plugs from sub-triangle sets (displaced-patch bottom, wall per rim edge); the remainder gets the matching pocket, and only the faces around the region are re-triangulated. |
 | `planecut.js` | Exact triangle clipping with welded section points and flat earcut caps. |
 | `viewer.js` | three.js scene, picking, row layout of parts, preview tints. |
 | `app.js` | UI glue: tools, palette, history (snapshot/undo), panels. |
@@ -180,7 +186,7 @@ graph TD
 A test harness (`tests/harness.js`) loads these browser IIFEs into a Node `vm`
 sandbox with vendored three.js + poly2tri, so the pure geometry is testable
 headlessly. Watertightness is asserted as *every undirected edge used exactly
-twice*; winding is covered by an signed-volume checks.
+twice*; winding is covered by the directed closed check and signed-volume checks.
 
 ---
 

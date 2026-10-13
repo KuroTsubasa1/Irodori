@@ -14,7 +14,7 @@ graph. Keep it that way (no bundler/ESM migration).
   modules and produces phantom "X is not a function" errors.
 - **Tests:** `npm test` (= `node --test`). Node's built-in runner;
   `tests/harness.js` loads the browser IIFEs into a `vm` sandbox (with
-  vendored three.js + poly2tri) and returns the globals. 93 tests.
+  vendored three.js + poly2tri) and returns the globals. 98 tests.
 
 ## Hard rules
 
@@ -44,13 +44,21 @@ graph. Keep it that way (no bundler/ESM migration).
 - `meshgeo.js` — pure geometry: cached bounds, directed closed-surface check,
   Möller tri–tri test, face grid + inward ray cast (`rayHit`, back-face only).
 - `split.js` — volumetric split: `plugSolids(mesh, subs, {depth})` →
-  `{ part, remainder }` as real document meshes. The part is a skin plug: top =
-  the painted patch, bottom = a displaced copy of the patch on a smooth depth
-  field (`min(depth, ½·t_hit) · |cos θ|`), one wall quad per rim edge. The
-  remainder gets the reversed wall/bottom (matching pocket). Gate: closed +
-  positive volume + triangle-intersection check; otherwise the split is
-  refused with an error. Parts carry `mesh.part = { label, state }`; the viewer
-  lays them out in a row (display-only offsets), export stays coincident.
+  `{ part, remainder, info }` as real document meshes. The part is a skin
+  plug: top = the painted patch, bottom = the patch displaced along a
+  spatially smooth inward field D (kernel-smoothed patch normal) by
+  s = min(depth, ½·thickness along D) · τ — τ the transversality ramp of D
+  against every incident sub — then a geodesic Lipschitz envelope (slope ≤
+  0.5) so the skin cannot fold; one wall quad per rim edge. The remainder
+  gets the reversed wall/skin (matching pocket). Only the AFFECTED faces
+  (region + T-junction closure) are re-triangulated; every other face keeps
+  its original triangle, vertex ids and `paint_color`. Gate: toleranced
+  intersection test (contact tol = min(1e-3·diag, 0.05 mm)), then closed +
+  positive volume; otherwise refused. `info.wraps` (patch Euler
+  characteristic ≠ 1 after filling paint specks) drives the "wraps around"
+  warning. Parts carry `mesh.part = { seq, state }`; the name is derived by
+  `partLabel` in app.js. The viewer lays parts out in a row (display-only
+  offsets), export stays coincident.
 - `planecut.js` — geometric plane cut (`cutMesh`): exact triangle clipping
   with per-edge welded section points, section chords from clipped triangles
   AND from on-plane mesh edges, flat earcut caps wound ±n. Cutting sets
@@ -67,7 +75,8 @@ casually.
 
 - Paint "states" = filament indices; state 0 = the object's default extruder.
 - Watertightness in tests = every undirected edge used exactly twice — this is
-  **winding-blind**; winding is covered by the signed-volume checks (`MeshGeo.checkClosed`).
+  **winding-blind**. `MeshGeo.checkClosed` is the directed (winding-aware)
+  closed test; `MeshGeo.signedVolume` > 0 checks the orientation.
 - Mirror/symmetry centers derive from sub-centroid bounds (`axisCenters`) —
   live previews (`mirrorMap`) and final stamp reflection must agree.
 - Verification screenshots (`*.jpeg`) and `.playwright-mcp/` are disposable
