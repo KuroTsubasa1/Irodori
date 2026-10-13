@@ -80,3 +80,30 @@ test("triTriIntersect: tiny near-parallel separated triangles are not an interse
   const C = [[0, 0, 0], [2e-3, 0, 0], [0, 2e-3, 0]], E = [[5e-4, 5e-4, -1e-3], [5e-4, 5e-4, 1e-3], [1e-3, 1e-3, 1e-3]];
   assert.strictEqual(MeshGeo.triTriIntersect(...C, ...E), true);
 });
+
+test("segTriCross: proper piercing only — endpoints on the plane, parallel and outside segments don't count", () => {
+  const { MeshGeo } = loadModules();
+  const A = [0, 0, 0], B = [2, 0, 0], C = [0, 2, 0];
+  assert.strictEqual(MeshGeo.segTriCross([0.5, 0.5, -1], [0.5, 0.5, 1], A, B, C), true);
+  assert.strictEqual(MeshGeo.segTriCross([0.5, 0.5, 0], [0.5, 0.5, 1], A, B, C), false, "starts on the triangle");
+  assert.strictEqual(MeshGeo.segTriCross([0.5, 0.5, 0.1], [0.6, 0.6, 0.1], A, B, C), false, "parallel above");
+  assert.strictEqual(MeshGeo.segTriCross([0.2, 0.2, 0], [0.6, 0.6, 0], A, B, C), false, "coplanar inside");
+  assert.strictEqual(MeshGeo.segTriCross([3, 3, -1], [3, 3, 1], A, B, C), false, "misses");
+});
+
+test("foldedPair: edge-adjacent triangles overlap only when folded flat onto each other", () => {
+  const { MeshGeo } = loadModules();
+  const s0 = [0, 0, 0], s1 = [1, 0, 0];
+  assert.strictEqual(MeshGeo.foldedPair(s0, s1, [0.5, 1, 0], [0.3, 0.5, 0]), true, "same side, coplanar");
+  assert.strictEqual(MeshGeo.foldedPair(s0, s1, [0.5, 1, 0], [0.5, -1, 0]), false, "flat, opposite sides");
+  assert.strictEqual(MeshGeo.foldedPair(s0, s1, [0.5, 1, 0], [0.5, 0, 1]), false, "90 degree hinge");
+});
+
+test("checkClosed: a doubled face and a missing face are both counted", () => {
+  const { MeshGeo } = loadModules();
+  const cube = makeClosedCube();
+  const drop = { ...cube, nf: cube.nf - 1, v1: cube.v1.slice(1), v2: cube.v2.slice(1), v3: cube.v3.slice(1) };
+  assert.strictEqual(MeshGeo.checkClosed(drop), 3, "three open edges");
+  const dup = { ...cube, nf: cube.nf + 1, v1: Int32Array.from([...cube.v1, cube.v1[0]]), v2: Int32Array.from([...cube.v2, cube.v2[0]]), v3: Int32Array.from([...cube.v3, cube.v3[0]]) };
+  assert.strictEqual(MeshGeo.checkClosed(dup), 3, "three edges used twice in one direction");
+});

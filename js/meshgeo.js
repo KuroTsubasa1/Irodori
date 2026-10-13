@@ -20,22 +20,32 @@
 
   // Number of undirected edges NOT traversed exactly once in each direction.
   // 0 <=> closed and consistently oriented (the "directed watertight" test).
+  // (Sorted directed-edge keys instead of a Map: ~10x faster on the ~1M-face
+  // remainders of a real split.)
   function checkClosed(mesh) {
-    const NV = mesh.positions.length / 3;
-    const dir = new Map(); // directed key -> count
-    const add = (u, v) => { const k = u * NV + v; dir.set(k, (dir.get(k) || 0) + 1); };
-    for (let f = 0; f < mesh.nf; f++) {
+    const NV = mesh.positions.length / 3, nf = mesh.nf;
+    const K = new Float64Array(nf * 3);
+    for (let f = 0; f < nf; f++) {
       const a = mesh.v1[f], b = mesh.v2[f], c = mesh.v3[f];
-      add(a, b); add(b, c); add(c, a);
+      K[f * 3] = a * NV + b; K[f * 3 + 1] = b * NV + c; K[f * 3 + 2] = c * NV + a;
     }
+    K.sort();
+    const count = (k) => { // occurrences of key k (binary search)
+      let lo = 0, hi = K.length;
+      while (lo < hi) { const mid = (lo + hi) >> 1; if (K[mid] < k) lo = mid + 1; else hi = mid; }
+      let n = 0; while (lo + n < K.length && K[lo + n] === k) n++;
+      return n;
+    };
     let bad = 0;
-    const seen = new Set();
-    for (const k of dir.keys()) {
+    for (let i = 0; i < K.length;) {
+      const k = K[i]; let c = 1;
+      while (i + c < K.length && K[i + c] === k) c++;
+      i += c;
       const u = Math.floor(k / NV), v = k - u * NV;
-      const uk = u < v ? k : v * NV + u;
-      if (seen.has(uk)) continue;
-      seen.add(uk);
-      if ((dir.get(u * NV + v) || 0) !== 1 || (dir.get(v * NV + u) || 0) !== 1) bad++;
+      const rc = count(v * NV + u);
+      if (u === v) { if (c !== 1) bad++; }
+      else if (u < v) { if (c !== 1 || rc !== 1) bad++; } // undirected edge counted from its u<v side…
+      else if (rc === 0) bad++;                       // …or here when that side never occurs
     }
     return bad;
   }
@@ -47,51 +57,89 @@
   // An absolute 1e-9 on |N| ~ 1e-5 (0.005 mm triangles) snapped planes 3e-5 mm
   // apart and reported near-parallel, laterally SEPARATED neighbours as crossing.
   const REL_EPS = 1e-9;
-  const len3 = (a) => Math.hypot(a[0], a[1], a[2]);
-  function triTriIntersect(V0, V1, V2, U0, U1, U2) {
-    const sub = (a, b) => [a[0] - b[0], a[1] - b[1], a[2] - b[2]];
-    const cross = (a, b) => [a[1] * b[2] - a[2] * b[1], a[2] * b[0] - a[0] * b[2], a[0] * b[1] - a[1] * b[0]];
-    const dot = (a, b) => a[0] * b[0] + a[1] * b[1] + a[2] * b[2];
-    const size = Math.max(len3(sub(V1, V0)), len3(sub(V2, V0)), len3(sub(U1, U0)), len3(sub(U2, U0)));
-    const N1 = cross(sub(V1, V0), sub(V2, V0));
-    const d1 = -dot(N1, V0), e1 = REL_EPS * len3(N1) * size;
-    let du0 = dot(N1, U0) + d1, du1 = dot(N1, U1) + d1, du2 = dot(N1, U2) + d1;
-    if (Math.abs(du0) < e1) du0 = 0; if (Math.abs(du1) < e1) du1 = 0; if (Math.abs(du2) < e1) du2 = 0;
+  // Interval endpoints on the intersection line (NoDiv form) -> out[0..4];
+  // false when the triangle lies in the other's plane (coplanar).
+  function intervals(out, VV0, VV1, VV2, D0, D1, D2, D0D1, D0D2) {
+    if (D0D1 > 0) { out[0] = VV2; out[1] = (VV0 - VV2) * D2; out[2] = (VV1 - VV2) * D2; out[3] = D2 - D0; out[4] = D2 - D1; }
+    else if (D0D2 > 0) { out[0] = VV1; out[1] = (VV0 - VV1) * D1; out[2] = (VV2 - VV1) * D1; out[3] = D1 - D0; out[4] = D1 - D2; }
+    else if (D1 * D2 > 0 || D0 !== 0) { out[0] = VV0; out[1] = (VV1 - VV0) * D0; out[2] = (VV2 - VV0) * D0; out[3] = D0 - D1; out[4] = D0 - D2; }
+    else if (D1 !== 0) { out[0] = VV1; out[1] = (VV0 - VV1) * D1; out[2] = (VV2 - VV1) * D1; out[3] = D1 - D0; out[4] = D1 - D2; }
+    else if (D2 !== 0) { out[0] = VV2; out[1] = (VV0 - VV2) * D2; out[2] = (VV1 - VV2) * D2; out[3] = D2 - D0; out[4] = D2 - D1; }
+    else return false;
+    return true;
+  }
+  const I1 = new Float64Array(5), I2 = new Float64Array(5);
+  // Allocation-free core: triangle V = A[a..a+8], U = B[b..b+8] (xyz xyz xyz).
+  function triTriFlat(A, a, B, b) {
+    const v0x = A[a], v0y = A[a + 1], v0z = A[a + 2], v1x = A[a + 3], v1y = A[a + 4], v1z = A[a + 5], v2x = A[a + 6], v2y = A[a + 7], v2z = A[a + 8];
+    const u0x = B[b], u0y = B[b + 1], u0z = B[b + 2], u1x = B[b + 3], u1y = B[b + 4], u1z = B[b + 5], u2x = B[b + 6], u2y = B[b + 7], u2z = B[b + 8];
+    const e1x = v1x - v0x, e1y = v1y - v0y, e1z = v1z - v0z, e2x = v2x - v0x, e2y = v2y - v0y, e2z = v2z - v0z;
+    const f1x = u1x - u0x, f1y = u1y - u0y, f1z = u1z - u0z, f2x = u2x - u0x, f2y = u2y - u0y, f2z = u2z - u0z;
+    const size = Math.sqrt(Math.max(e1x * e1x + e1y * e1y + e1z * e1z, e2x * e2x + e2y * e2y + e2z * e2z, f1x * f1x + f1y * f1y + f1z * f1z, f2x * f2x + f2y * f2y + f2z * f2z));
+    const n1x = e1y * e2z - e1z * e2y, n1y = e1z * e2x - e1x * e2z, n1z = e1x * e2y - e1y * e2x;
+    const d1 = -(n1x * v0x + n1y * v0y + n1z * v0z), eps1 = REL_EPS * Math.hypot(n1x, n1y, n1z) * size;
+    let du0 = n1x * u0x + n1y * u0y + n1z * u0z + d1, du1 = n1x * u1x + n1y * u1y + n1z * u1z + d1, du2 = n1x * u2x + n1y * u2y + n1z * u2z + d1;
+    if (Math.abs(du0) < eps1) du0 = 0; if (Math.abs(du1) < eps1) du1 = 0; if (Math.abs(du2) < eps1) du2 = 0;
     const du0du1 = du0 * du1, du0du2 = du0 * du2;
     if (du0du1 > 0 && du0du2 > 0) return false;
-    const N2 = cross(sub(U1, U0), sub(U2, U0));
-    const d2 = -dot(N2, U0), e2 = REL_EPS * len3(N2) * size;
-    let dv0 = dot(N2, V0) + d2, dv1 = dot(N2, V1) + d2, dv2 = dot(N2, V2) + d2;
-    if (Math.abs(dv0) < e2) dv0 = 0; if (Math.abs(dv1) < e2) dv1 = 0; if (Math.abs(dv2) < e2) dv2 = 0;
+    const n2x = f1y * f2z - f1z * f2y, n2y = f1z * f2x - f1x * f2z, n2z = f1x * f2y - f1y * f2x;
+    const d2 = -(n2x * u0x + n2y * u0y + n2z * u0z), eps2 = REL_EPS * Math.hypot(n2x, n2y, n2z) * size;
+    let dv0 = n2x * v0x + n2y * v0y + n2z * v0z + d2, dv1 = n2x * v1x + n2y * v1y + n2z * v1z + d2, dv2 = n2x * v2x + n2y * v2y + n2z * v2z + d2;
+    if (Math.abs(dv0) < eps2) dv0 = 0; if (Math.abs(dv1) < eps2) dv1 = 0; if (Math.abs(dv2) < eps2) dv2 = 0;
     const dv0dv1 = dv0 * dv1, dv0dv2 = dv0 * dv2;
     if (dv0dv1 > 0 && dv0dv2 > 0) return false;
-    const D = cross(N1, N2);
-    let idx = 0, mx = Math.abs(D[0]);
-    if (Math.abs(D[1]) > mx) { mx = Math.abs(D[1]); idx = 1; }
-    if (Math.abs(D[2]) > mx) idx = 2;
-    const vp0 = V0[idx], vp1 = V1[idx], vp2 = V2[idx];
-    const up0 = U0[idx], up1 = U1[idx], up2 = U2[idx];
-    // returns [A, B, C, X0, X1] or null when coplanar
-    const intervals = (VV0, VV1, VV2, D0, D1, D2, D0D1, D0D2) => {
-      if (D0D1 > 0) return [VV2, (VV0 - VV2) * D2, (VV1 - VV2) * D2, D2 - D0, D2 - D1];
-      if (D0D2 > 0) return [VV1, (VV0 - VV1) * D1, (VV2 - VV1) * D1, D1 - D0, D1 - D2];
-      if (D1 * D2 > 0 || D0 !== 0) return [VV0, (VV1 - VV0) * D0, (VV2 - VV0) * D0, D0 - D1, D0 - D2];
-      if (D1 !== 0) return [VV1, (VV0 - VV1) * D1, (VV2 - VV1) * D1, D1 - D0, D1 - D2];
-      if (D2 !== 0) return [VV2, (VV0 - VV2) * D2, (VV1 - VV2) * D2, D2 - D0, D2 - D1];
-      return null;
-    };
-    const I1 = intervals(vp0, vp1, vp2, dv0, dv1, dv2, dv0dv1, dv0dv2);
-    const I2 = intervals(up0, up1, up2, du0, du1, du2, du0du1, du0du2);
-    if (!I1 || !I2) return false;
-    const [a, b, c, x0, x1] = I1, [d, e, f, y0, y1] = I2;
+    const Dx = Math.abs(n1y * n2z - n1z * n2y), Dy = Math.abs(n1z * n2x - n1x * n2z), Dz = Math.abs(n1x * n2y - n1y * n2x);
+    const idx = Dx >= Dy && Dx >= Dz ? 0 : Dy >= Dz ? 1 : 2;
+    if (!intervals(I1, A[a + idx], A[a + 3 + idx], A[a + 6 + idx], dv0, dv1, dv2, dv0dv1, dv0dv2)) return false;
+    if (!intervals(I2, B[b + idx], B[b + 3 + idx], B[b + 6 + idx], du0, du1, du2, du0du1, du0du2)) return false;
+    const x0 = I1[3], x1 = I1[4], y0 = I2[3], y1 = I2[4];
     const xx = x0 * x1, yy = y0 * y1, xxyy = xx * yy;
-    let tmp = a * xxyy;
-    let i10 = tmp + b * x1 * yy, i11 = tmp + c * x0 * yy;
-    tmp = d * xxyy;
-    let i20 = tmp + e * xx * y1, i21 = tmp + f * xx * y0;
+    let tmp = I1[0] * xxyy;
+    let i10 = tmp + I1[1] * x1 * yy, i11 = tmp + I1[2] * x0 * yy;
+    tmp = I2[0] * xxyy;
+    let i20 = tmp + I2[1] * xx * y1, i21 = tmp + I2[2] * xx * y0;
     if (i10 > i11) { const s = i10; i10 = i11; i11 = s; }
     if (i20 > i21) { const s = i20; i20 = i21; i21 = s; }
     return !(i11 < i20 || i21 < i10);
+  }
+  const TA = new Float64Array(9), TB = new Float64Array(9);
+  function triTriIntersect(V0, V1, V2, U0, U1, U2) {
+    for (let k = 0; k < 3; k++) { TA[k] = V0[k]; TA[3 + k] = V1[k]; TA[6 + k] = V2[k]; TB[k] = U0[k]; TB[3 + k] = U1[k]; TB[6 + k] = U2[k]; }
+    return triTriFlat(TA, 0, TB, 0);
+  }
+
+  // Does segment p→q pass through the INTERIOR of triangle abc (strictly
+  // between its endpoints)? Segments (nearly) parallel to the triangle's plane
+  // return false — coplanar contact is never counted, as in triTriIntersect.
+  function segTriCross(p, q, a, b, c) {
+    const dx = q[0] - p[0], dy = q[1] - p[1], dz = q[2] - p[2];
+    const e1x = b[0] - a[0], e1y = b[1] - a[1], e1z = b[2] - a[2];
+    const e2x = c[0] - a[0], e2y = c[1] - a[1], e2z = c[2] - a[2];
+    const hx = dy * e2z - dz * e2y, hy = dz * e2x - dx * e2z, hz = dx * e2y - dy * e2x;
+    const det = e1x * hx + e1y * hy + e1z * hz;
+    const nx = e1y * e2z - e1z * e2y, ny = e1z * e2x - e1x * e2z, nz = e1x * e2y - e1y * e2x;
+    if (Math.abs(det) <= 1e-9 * Math.hypot(dx, dy, dz) * Math.hypot(nx, ny, nz)) return false;
+    const f = 1 / det, sx = p[0] - a[0], sy = p[1] - a[1], sz = p[2] - a[2];
+    const u = f * (sx * hx + sy * hy + sz * hz);
+    if (u <= 1e-9 || u >= 1 - 1e-9) return false;
+    const qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+    const v = f * (dx * qx + dy * qy + dz * qz);
+    if (v <= 1e-9 || u + v >= 1 - 1e-9) return false;
+    const t = f * (e2x * qx + e2y * qy + e2z * qz);
+    return t > 1e-9 && t < 1 - 1e-9;
+  }
+
+  // Edge-adjacent triangles (s0,s1,a) and (s0,s1,b) overlap beyond their
+  // shared edge only when folded flat onto each other: coplanar, with a and b
+  // on the same side of the edge.
+  function foldedPair(s0, s1, a, b) {
+    const ex = s1[0] - s0[0], ey = s1[1] - s0[1], ez = s1[2] - s0[2];
+    const ax = a[0] - s0[0], ay = a[1] - s0[1], az = a[2] - s0[2], bx = b[0] - s0[0], by = b[1] - s0[1], bz = b[2] - s0[2];
+    const nax = ey * az - ez * ay, nay = ez * ax - ex * az, naz = ex * ay - ey * ax;
+    const nbx = ey * bz - ez * by, nby = ez * bx - ex * bz, nbz = ex * by - ey * bx;
+    const la = Math.hypot(nax, nay, naz), lb = Math.hypot(nbx, nby, nbz);
+    if (!(la > 0) || !(lb > 0)) return false;
+    return (nax * nbx + nay * nby + naz * nbz) / (la * lb) > 1 - 1e-9;
   }
 
   // Uniform grid over face AABBs (CSR), cached as mesh._grid.
@@ -197,5 +245,5 @@
     return v6 / 6;
   }
 
-  global.MeshGeo = { meshBounds, checkClosed, signedVolume, triTriIntersect, faceGrid, rayHit };
+  global.MeshGeo = { meshBounds, checkClosed, signedVolume, triTriIntersect, triTriFlat, segTriCross, foldedPair, faceGrid, rayHit };
 })(window);
