@@ -15,7 +15,7 @@
 ![three.js](https://img.shields.io/badge/3D-three.js-000000?style=flat-square)
 ![Runs in your browser](https://img.shields.io/badge/runs-in_your_browser-ff5d4e?style=flat-square)
 ![100% local](https://img.shields.io/badge/privacy-nothing_uploaded-12b981?style=flat-square)
-![Tests](https://img.shields.io/badge/tests-76_passing-12b981?style=flat-square)
+![Tests](https://img.shields.io/badge/tests-93_passing-12b981?style=flat-square)
 
 </div>
 
@@ -73,8 +73,8 @@ as **genuine sliceable filaments**, and every add/delete is undoable.
 
 ### ✂️ Split painted regions into watertight solids
 
-Lift any connected colored region out as its own **watertight** part. Pick a cap
-method (Liepa smooth fill by default), then export every part **plus the
+Lift any connected colored region out as its own **watertight solid plug** with a
+depth in mm; the remainder gets the matching pocket. Export every part **plus the
 remainder** as separate objects in a single `.3mf` — the cut surfaces stay
 perfectly coincident.
 
@@ -127,7 +127,7 @@ python3 -m http.server 8000
 > caching will happily serve stale modules and produce phantom
 > "X is not a function" errors.
 
-Run the tests (Node's built-in runner, **76 tests**):
+Run the tests (Node's built-in runner, **93 tests**):
 
 ```bash
 npm test
@@ -149,8 +149,6 @@ graph TD
     subgraph_["subgraph.js<br/><i>sub-triangle adjacency</i>"]
     select["select.js<br/><i>selections · symmetry</i>"]
     cleanup["cleanup.js<br/><i>paint mutations</i>"]
-    liepa["liepa.js<br/><i>min-weight hole fill</i>"]
-    caps["caps.js<br/><i>boundary caps</i>"]
     split["split.js<br/><i>watertight solids</i>"]
     planecut["planecut.js<br/><i>geometric plane cut</i>"]
     viewer["viewer.js<br/><i>three.js scene · picking</i>"]
@@ -159,7 +157,7 @@ graph TD
     paint --> threemf
     paint --> subgraph_
     subgraph_ --> select --> cleanup
-    paint --> liepa --> caps --> split
+    paint --> split
     paint --> planecut
     threemf --> viewer
     cleanup --> app
@@ -174,17 +172,15 @@ graph TD
 | `paint.js` | Bambu `paint_color` codec; `Paint.tessellate` is **the** geometry convention every subdivision must match. |
 | `threemf.js` | `.3mf` zip load/export, multi-mesh round-trip, filament normalization. |
 | `subgraph.js` / `select.js` / `cleanup.js` | The `Cleanup` namespace: cached sub-triangle adjacency, read-only selections + symmetry, and paint-mutating ops. |
-| `liepa.js` | Liepa hole filling (rim decimation → 3-D min-weight DP → fan strips → refinement → fairing). |
-| `caps.js` | Boundary-loop extraction and cap triangulation. |
-| `split.js` | Watertight solids from sub-triangle sets; parts and remainder share one cut cap. |
+| `split.js` | Solid plugs from sub-triangle sets (displaced-patch bottom, wall per rim edge); the remainder gets the matching pocket. |
 | `planecut.js` | Exact triangle clipping with welded section points and flat earcut caps. |
-| `viewer.js` | three.js scene, picking, explode animation, preview tints. |
+| `viewer.js` | three.js scene, picking, row layout of parts, preview tints. |
 | `app.js` | UI glue: tools, palette, history (snapshot/undo), panels. |
 
 A test harness (`tests/harness.js`) loads these browser IIFEs into a Node `vm`
 sandbox with vendored three.js + poly2tri, so the pure geometry is testable
 headlessly. Watertightness is asserted as *every undirected edge used exactly
-twice*; winding is covered by an area-weighted Liepa regression.
+twice*; winding is covered by an signed-volume checks.
 
 ---
 

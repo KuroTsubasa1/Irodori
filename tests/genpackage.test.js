@@ -35,7 +35,7 @@ function loadWithZip() {
   for (const f of [
     "vendor/three.min.js", "vendor/poly2tri.min.js", "vendor/jszip.min.js",
     "js/paint.js", "js/objexport.js", "js/subgraph.js", "js/select.js",
-    "js/cleanup.js", "js/liepa.js", "js/caps.js", "js/split.js",
+    "js/cleanup.js", "js/split.js",
     "js/planecut.js", "js/threemf.js",
   ]) vm.runInContext(fs.readFileSync(path.join(root, f), "utf8"), sandbox, { filename: f });
   return sandbox;

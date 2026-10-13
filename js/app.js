@@ -718,7 +718,7 @@
     const subs = Cleanup.selectColorRegion(m, hit.localSub);
     const depth = Math.max(0, +$("splitDepth").value || 0);
     busy("Splitting…", () => {
-      const r = Split.plugSolids(m, subs, { depth, method: $("capMethod").value });
+      const r = Split.plugSolids(m, subs, { depth });
       if (r.error) { toast(r.error, true); return; }
       partSeq++;
       r.part.part = { label: "Part " + partSeq + " · " + colorName(hit.state), state: hit.state };
@@ -735,7 +735,7 @@
       buildObjects();
       updateStats();
       ensureSubGraphs("Preparing tool…");
-      toast(r.info.shell ? "Region too sharp for a plug — made a shell" : "Split out " + r.part.part.label);
+      toast("Split out " + r.part.part.label);
     });
   }
   Viewer.onPick((hit) => {

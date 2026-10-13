@@ -14,7 +14,7 @@ graph. Keep it that way (no bundler/ESM migration).
   modules and produces phantom "X is not a function" errors.
 - **Tests:** `npm test` (= `node --test`). Node's built-in runner;
   `tests/harness.js` loads the browser IIFEs into a `vm` sandbox (with
-  vendored three.js + poly2tri) and returns the globals. 111 tests.
+  vendored three.js + poly2tri) and returns the globals. 93 tests.
 
 ## Hard rules
 
@@ -41,26 +41,22 @@ graph. Keep it that way (no bundler/ESM migration).
   `invalidateSub` clears all mesh caches), read-only selections + symmetry
   queries, and paint-mutating operations (incl. `paintStamps`, the
   slicer-style stamp refinement run on brush release).
-- `liepa.js` — Liepa hole filling (rim decimation → 3-D min-weight DP →
-  fan strips → density refinement → fairing); the default cap method.
-- `caps.js` — boundary-loop extraction and cap triangulation. The cap
-  descriptor is `{ verts, extraPts, tris }`: triangle index `i < verts.length`
-  → welded global vertex id `verts[i]`, else `extraPts[i - verts.length]`.
 - `meshgeo.js` — pure geometry: cached bounds, directed closed-surface check,
   Möller tri–tri test, face grid + inward ray cast (`rayHit`, back-face only).
-- `split.js` — volumetric split: `plugSolids(mesh, subs, {depth, method})` →
-  `{ part, remainder }` as real document meshes (patch + inward wall + bottom;
-  the remainder gets the reversed wall/bottom = matching pocket). Depth per rim
-  vertex = `min(depth, ½·t_hit) · |cos θ|`; self-intersection → depth halving
-  (4×, then shell); outputs must pass `MeshGeo.checkClosed` or the split is
-  refused. Parts carry `mesh.part = { label, state }`; the viewer lays them out
-  in a row (display-only offsets), export stays coincident.
+- `split.js` — volumetric split: `plugSolids(mesh, subs, {depth})` →
+  `{ part, remainder }` as real document meshes. The part is a skin plug: top =
+  the painted patch, bottom = a displaced copy of the patch on a smooth depth
+  field (`min(depth, ½·t_hit) · |cos θ|`), one wall quad per rim edge. The
+  remainder gets the reversed wall/bottom (matching pocket). Gate: closed +
+  positive volume + triangle-intersection check; otherwise the split is
+  refused with an error. Parts carry `mesh.part = { label, state }`; the viewer
+  lays them out in a row (display-only offsets), export stays coincident.
 - `planecut.js` — geometric plane cut (`cutMesh`): exact triangle clipping
   with per-edge welded section points, section chords from clipped triangles
   AND from on-plane mesh edges, flat earcut caps wound ±n. Cutting sets
   `doc.synthetic`, which routes export through the generated package (the
   original XML can no longer be spliced).
-- `viewer.js` — three.js scene, picking, explode animation, preview tints.
+- `viewer.js` — three.js scene, picking (`pick` returns the model `point` + display `world`), row layout of parts via display-only offsets, preview tints.
 - `app.js` — UI glue: tools, palette, history (snapshot/undo), panels.
 
 **Known debt:** `viewer.js` and `app.js` are each one closure over shared UI
@@ -71,7 +67,7 @@ casually.
 
 - Paint "states" = filament indices; state 0 = the object's default extruder.
 - Watertightness in tests = every undirected edge used exactly twice — this is
-  **winding-blind**; winding is covered by the Liepa area-weighted regression.
+  **winding-blind**; winding is covered by the signed-volume checks (`MeshGeo.checkClosed`).
 - Mirror/symmetry centers derive from sub-centroid bounds (`axisCenters`) —
   live previews (`mirrorMap`) and final stamp reflection must agree.
 - Verification screenshots (`*.jpeg`) and `.playwright-mcp/` are disposable
